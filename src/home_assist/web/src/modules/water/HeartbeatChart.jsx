@@ -54,11 +54,12 @@ const LEVEL_COLOR = { running: 'var(--w-series)', long: 'var(--w-serious)', cont
  * need to see WHEN it happened, not only that it is happening now.
  */
 export default function HeartbeatChart({
-  series,             // [{ minute_utc, minute_mtn, odometer, packets }]
+  series,             // [{ minute_utc, minute_mtn, odometer, packets }]  per-minute, from MySQL
+  tail = [],          // [{ t, gallons }]  the LIVE tail, straight off the 5s status poll
   runs = [],          // [{ start, end, minutes, level }]
   overnight,          // [startHour, endHour] or null
   height = 250,
-  emptyMessage = 'Waiting for the first minute of data…',
+  emptyMessage = 'Waiting for the first reading…',
 }) {
   const [hover, setHover] = useState(null);
   const [ref, measured] = useWidth();
@@ -69,7 +70,21 @@ export default function HeartbeatChart({
   //   pts  the minutes that carry an odometer — the scale for the reading line.
   const all = (series || []);
   const pts = all.filter((d) => d.odometer !== null && d.odometer !== undefined);
-  if (pts.length < 2) {
+
+  // The LIVE TAIL. `series` is a per-minute rollup, so on its own the line can only ever move once
+  // a minute — you turn on a tap and stare at a flat line for up to 60 seconds wondering whether
+  // anything works. The tail is the same odometer read straight from water_collector_state on the
+  // 5-second poll, appended past the last stored minute, so the line moves while you are watching.
+  //
+  // Only the READING gets sub-minute resolution. The pulse stays per-minute on purpose: it answers
+  // "is the radio alive", which is a question about a whole minute, and a per-poll pulse would just
+  // be the poll interval drawn back at you.
+  const lastMinuteT = pts.length ? new Date(pts[pts.length - 1].minute_utc).getTime() : 0;
+  const tailPts = (tail || [])
+    .filter((p) => p && Number.isFinite(p.t) && Number.isFinite(p.gallons) && p.t > lastMinuteT)
+    .sort((a, b) => a.t - b.t);
+
+  if (pts.length + tailPts.length < 2) {
     return <div ref={ref}><p className="muted" style={{ padding: '30px 0' }}>{emptyMessage}</p></div>;
   }
 
@@ -82,8 +97,13 @@ export default function HeartbeatChart({
   const pulseTop = padT + readingH + 22;               // the green trace, below it
   const pulseH = 16;
 
-  const t0 = new Date(all[0].minute_utc).getTime();
-  const t1 = new Date(all[all.length - 1].minute_utc).getTime();
+  const t0 = all.length ? new Date(all[0].minute_utc).getTime() : tailPts[0].t;
+  // t1 is the LIVE edge — the tail runs past the last stored minute, and the axis has to follow it
+  // or the newest points pile up on top of the last gridline.
+  const t1 = Math.max(
+    all.length ? new Date(all[all.length - 1].minute_utc).getTime() : 0,
+    tailPts.length ? tailPts[tailPts.length - 1].t : 0
+  );
   const span = Math.max(60000, t1 - t0);
 
   // ── downsample to one column per ~2 physical pixels ────────────────────────────────────────
@@ -118,15 +138,18 @@ export default function HeartbeatChart({
     // Anything still unknown is a stretch BEFORE the first reading — held at the first known value
     // rather than dropped, because dropping it would take the pulse for those minutes with it, and
     // "the collector just started and heard nothing" is a case worth seeing, not hiding.
-    const first = pts[0].odometer;
+    const first = pts.length ? pts[0].odometer : tailPts[0].gallons;
     return bucket.filter(Boolean).map((c) => {
       if (c.odo !== null) carried = c.odo;
       return c.odo === null ? { ...c, odo: carried === null ? first : carried } : c;
     });
   })();
 
-  const base = pts[0].odometer;
-  const peak = pts.reduce((a, d) => Math.max(a, d.odometer), base);
+  const base = pts.length ? pts[0].odometer : tailPts[0].gallons;
+  const peak = Math.max(
+    pts.reduce((a, d) => Math.max(a, d.odometer), base),
+    tailPts.reduce((a, d) => Math.max(a, d.gallons), base)
+  );
   // Headroom so the live tip is not welded to the top gridline, and a floor so a totally flat
   // window still renders a sensible axis instead of dividing by zero.
   const usedMax = Math.max(1, (peak - base) * 1.25);
@@ -136,15 +159,20 @@ export default function HeartbeatChart({
 
   // Stepped path: the odometer holds its value until it ticks, so a diagonal would imply water
   // flowing smoothly between readings when it did not.
+  // The stored minutes and the live tail are ONE path, not two series: it is the same odometer,
+  // just read at two resolutions. A separate line would imply a second measurement.
+  const linePts = cols.map((c) => ({ t: c.t, odo: c.odo }))
+    .concat(tailPts.map((p) => ({ t: p.t, odo: p.gallons })));
   let d = '';
-  cols.forEach((c, i) => {
+  linePts.forEach((c, i) => {
     const px = x(c.t);
     const py = y(c.odo - base);
     d += i === 0 ? `M${px.toFixed(1)} ${py.toFixed(1)}` : ` L${px.toFixed(1)} ${py.toFixed(1)}`;
   });
-  const last = pts[pts.length - 1];
-  const lastX = x(new Date(last.minute_utc).getTime());
-  const lastY = y(last.odometer - base);
+  const last = linePts[linePts.length - 1];
+  const lastX = x(last.t);
+  const lastY = y(last.odo - base);
+  const lastOdo = last.odo;
 
   const ticks = [0, usedMax / 2, usedMax];
   const fmtUsed = (v) => (usedMax < 4 ? v.toFixed(1) : Math.round(v).toString());
@@ -186,8 +214,7 @@ export default function HeartbeatChart({
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <svg width={W} height={H} role="img" onMouseMove={onMove} onMouseLeave={() => setHover(null)}
-        aria-label={'Meter reading ' + Math.round(last.odometer) + ' gallons; ' +
-          (last.packets ? last.packets + ' packets in the last minute' : 'no packets in the last minute')}>
+        aria-label={'Meter reading ' + Math.round(lastOdo) + ' gallons'}>
 
         <text x={padL - 6} y={11} textAnchor="end" fontSize="10" fill="var(--w-axis)">used</text>
         <text x={W - padR + 8} y={11} fontSize="10" fill="var(--w-axis)">reading</text>
@@ -198,33 +225,50 @@ export default function HeartbeatChart({
         ))}
 
         {/* Run bands sit above the overnight tint but below the line. */}
-        {runs.map((r, i) => {
-          const rs = Math.max(new Date(r.start).getTime(), t0);
-          const re = Math.min(new Date(r.end).getTime(), t1);
-          if (re <= rs || r.level === 'running') return null;   // short runs are normal; don't shout
-          return (
-            <g key={'r' + i}>
-              <rect x={x(rs)} y={padT} width={Math.max(2, x(re) - x(rs))} height={readingH}
-                    fill={LEVEL_COLOR[r.level]} opacity="0.09" />
-              {/* The label is centred on the band, then clamped inside the plot: a run that is
-                  still going sits hard against the right edge, and an unclamped label would print
-                  over the "reading" axis header. */}
-              <text x={Math.min(Math.max((x(rs) + x(re)) / 2, padL + 52), W - padR - 52)}
-                    y={padT - 5} textAnchor="middle" fontSize="9.5"
-                    fontWeight="700" fill={LEVEL_COLOR[r.level]}>
-                {r.level === 'continuous' ? 'CONTINUOUS RUN ' : 'LONG RUN '}
-                {r.minutes >= 60 ? Math.floor(r.minutes / 60) + 'h ' + (r.minutes % 60) + 'm' : r.minutes + 'm'}
-              </text>
-            </g>
-          );
-        })}
+        {(() => {
+          // Labels are laid out left to right with a minimum gap. Six runs in a 72-hour window
+          // otherwise print six captions on top of each other at the right edge, which is how you
+          // turn a useful annotation into a smear. The BAND always draws; only the caption is
+          // rationed, and a continuous run always wins the slot over a merely long one.
+          let lastLabelX = -Infinity;
+          const ordered = runs
+            .map((r, i) => ({ r, i }))
+            .filter(({ r }) => r.level !== 'running')            // short runs are normal; don't shout
+            .sort((a, b) => new Date(a.r.start) - new Date(b.r.start));
+          return ordered.map(({ r, i }) => {
+            const rs = Math.max(new Date(r.start).getTime(), t0);
+            const re = Math.min(new Date(r.end).getTime(), t1);
+            if (re <= rs) return null;
+            const mid = Math.min(Math.max((x(rs) + x(re)) / 2, padL + 52), W - padR - 52);
+            const room = mid - lastLabelX >= 104;
+            const label = room || r.level === 'continuous';
+            if (label) lastLabelX = mid;
+            return (
+              <g key={'r' + i}>
+                <rect x={x(rs)} y={padT} width={Math.max(2, x(re) - x(rs))} height={readingH}
+                      fill={LEVEL_COLOR[r.level]} opacity="0.09" />
+                {label ? (
+                  <text x={mid} y={padT - 5} textAnchor="middle" fontSize="9.5"
+                        fontWeight="700" fill={LEVEL_COLOR[r.level]}>
+                    {r.level === 'continuous' ? 'CONTINUOUS RUN ' : 'LONG RUN '}
+                    {r.minutes >= 60 ? Math.floor(r.minutes / 60) + 'h ' + (r.minutes % 60) + 'm' : r.minutes + 'm'}
+                  </text>
+                ) : null}
+              </g>
+            );
+          });
+        })()}
 
         {ticks.map((v, i) => (
           <g key={'t' + i}>
             <line x1={padL} x2={W - padR} y1={y(v)} y2={y(v)} stroke="var(--w-grid)" strokeWidth="1" />
             <text x={padL - 6} y={y(v) + 4} textAnchor="end" fontSize="11" fill="var(--w-axis)">{fmtUsed(v)}</text>
+            {/* Match the LEFT axis's precision. Rounding to whole gallons on a 1-gallon window
+                printed the same number three times, which reads as a broken axis. */}
             <text x={W - padR + 8} y={y(v) + 4} fontSize="11" fill="var(--w-axis)">
-              {Math.round(base + v).toLocaleString()}
+              {(usedMax < 4
+                ? (base + v).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+                : Math.round(base + v).toLocaleString())}
             </text>
           </g>
         ))}
@@ -237,7 +281,7 @@ export default function HeartbeatChart({
           <animate attributeName="opacity" values="0.28;0;0.28" dur="2.4s" repeatCount="indefinite" />
         </circle>
         <text x={W - padR + 8} y={lastY + 4} fontSize="11" fontWeight="700" fill="var(--w-series)">
-          {Math.round(last.odometer).toLocaleString()}
+          {Math.round(lastOdo).toLocaleString()}
         </text>
 
         {/* ── the pulse ───────────────────────────────────────────────────────────── */}

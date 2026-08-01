@@ -51,6 +51,7 @@ export default function Monitor() {
   const [hourly, setHourly] = useState(null);
   const [alerts, setAlerts] = useState(null);
   const [meter, setMeter] = useState(null);
+  const [tail, setTail] = useState([]);
   const [err, setErr] = useState('');
 
   // Meter-card controls
@@ -69,10 +70,35 @@ export default function Monitor() {
   const longRef = useRef(null);
   const hourlyRef = useRef(null);
 
+  // The live tail. `/api/water/meter` returns a per-MINUTE series, so on its own the chart can only
+  // move once a minute — you open a tap and watch a flat line, which is the exact opposite of what
+  // this card is for. The 5-second status poll already carries the current odometer and the time of
+  // the last packet, so the tail costs nothing extra: no new endpoint, no new table, no new writes.
+  //
+  // Stamped with the METER's last-heard time, never the browser clock. If the collector goes deaf
+  // the tail must STOP advancing rather than keep drawing a confident flat line into the present.
+  const TAIL_MS = 15 * 60 * 1000;
+
   const loadStatus = useCallback(async () => {
     const s = await api.waterStatus();
-    if (s.status === 200 && s.body.ok) { setStatus(s.body); setErr(''); }
-    else setErr(s.body.error || 'Could not load status');
+    if (s.status === 200 && s.body.ok) {
+      setStatus(s.body);
+      setErr('');
+      const odo = s.body.meter && s.body.meter.odometer_gallons;
+      const readAt = s.body.receiver && s.body.receiver.last_read_at;
+      if (typeof odo === 'number' && Number.isFinite(odo) && readAt) {
+        const t = new Date(readAt).getTime();
+        if (Number.isFinite(t)) {
+          setTail((prev) => {
+            const lastPt = prev[prev.length - 1];
+            if (lastPt && lastPt.t === t && lastPt.gallons === odo) return prev;   // nothing new
+            // A rollover or a data wipe would otherwise draw one enormous negative cliff.
+            const next = lastPt && odo < lastPt.gallons ? [] : prev;
+            return next.concat({ t, gallons: odo }).filter((p) => p.t >= t - TAIL_MS);
+          });
+        }
+      }
+    } else setErr(s.body.error || 'Could not load status');
   }, []);
 
   const loadSeries = useCallback(async () => {
@@ -124,7 +150,10 @@ export default function Monitor() {
   const hb = meter && meter.mode === 'heartbeat' ? meter : null;
   const lv = meter && meter.mode === 'long' ? meter : null;
   const pts = hb ? hb.series.filter((p) => p.odometer !== null && p.odometer !== undefined) : [];
-  const usedInWindow = pts.length >= 2 ? Math.max(0, pts[pts.length - 1].odometer - pts[0].odometer) : 0;
+  const tailLast = tail.length ? tail[tail.length - 1].gallons : null;
+  const windowEnd = tailLast !== null && pts.length ? Math.max(tailLast, pts[pts.length - 1].odometer)
+    : pts.length ? pts[pts.length - 1].odometer : null;
+  const usedInWindow = pts.length && windowEnd !== null ? Math.max(0, windowEnd - pts[0].odometer) : 0;
   const recentPulse = pts.slice(-10);
   const pulseAvg = recentPulse.length
     ? recentPulse.reduce((a, p) => a + (p.packets || 0), 0) / recentPulse.length : 0;
@@ -330,6 +359,7 @@ export default function Monitor() {
             <div ref={hbRef}>
               <HeartbeatChart
                 series={hb ? hb.series : []}
+                tail={tail}
                 runs={hb ? hb.runs : []}
                 overnight={hb ? hb.overnight : null}
                 height={250}

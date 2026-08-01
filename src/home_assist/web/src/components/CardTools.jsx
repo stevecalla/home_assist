@@ -32,6 +32,43 @@ function cssvar(name, scope) {
   } catch (e) { return '#888'; }
 }
 
+// Every paint property a chart here can set from a stylesheet. Anything omitted falls back to the
+// SVG default in the export, and the SVG default for `fill` is BLACK.
+const PAINT = [
+  'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray',
+  'stroke-linejoin', 'stroke-linecap', 'opacity', 'font-size', 'font-family', 'font-weight',
+  'text-anchor', 'dominant-baseline', 'letter-spacing',
+];
+
+/**
+ * Bake the rendered appearance into the clone, walking the ORIGINAL and the CLONE in lockstep.
+ *
+ * Two separate ways a colour can go missing from an exported SVG, and both had to be handled:
+ *
+ *   1. `fill="var(--w-series)"` — the attribute survives serialisation but nothing can resolve it.
+ *   2. `class="w-bar"` — the attribute survives too, but the STYLESHEET does not. water.css is not
+ *      part of the serialised document, so every class-styled element falls back to the SVG
+ *      default. `fill` defaults to black, and a bar chart exports as a solid black slab. This is
+ *      what BarChart did: it colours entirely through classes, so the export was unreadable while
+ *      the on-screen chart was fine.
+ *
+ * Reading getComputedStyle off the live element covers both at once — it is the browser's own
+ * answer to "what colour is this actually", after variables, classes, inline styles and the theme.
+ */
+function inline_styles(orig, clone) {
+  if (!orig || orig.nodeType !== 1) return;
+  const cs = getComputedStyle(orig);
+  PAINT.forEach((p) => {
+    let v = cs.getPropertyValue(p);
+    if (!v) return;
+    v = v.trim();
+    if (!v || v === 'none' && p !== 'fill' && p !== 'stroke') return;
+    clone.setAttribute(p, v);
+  });
+  const oc = orig.childNodes || [], cc = clone.childNodes || [];
+  for (let i = 0; i < oc.length && i < cc.length; i++) inline_styles(oc[i], cc[i]);
+}
+
 function resolve_vars(el, scope) {
   const attrs = ['fill', 'stroke'];
   const walk = (node) => {
@@ -69,6 +106,7 @@ function svg_png(svgEl, title) {
   return new Promise((resolve) => {
     if (!svgEl) return resolve('');
     const clone = resolve_vars(svgEl.cloneNode(true), svgEl);
+    inline_styles(svgEl, clone);          // must run AFTER the clone exists and BEFORE serialising
     const w = svgEl.clientWidth || Number(svgEl.getAttribute('width')) || 900;
     const h = Number(svgEl.getAttribute('height')) || svgEl.clientHeight || 260;
     clone.setAttribute('width', w);
