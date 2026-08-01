@@ -395,8 +395,65 @@ const ALERT_CATALOG = [
   },
 ];
 
+
+/**
+ * run_spans — every continuous run inside a window, not just the one happening now.
+ *
+ * current_run() answers "is water running RIGHT NOW". The chart needs the other half: WHERE in the
+ * last 72 hours were there runs, so a run that started at 2am and stopped at 4am is still visible
+ * at breakfast. Same gap rule, applied across the whole window instead of only from the newest row
+ * backwards — one definition of "a run", used by both, so the banner and the chart cannot disagree.
+ *
+ * Pure: readings + settings in, plain objects out. No DB, no clock beyond what is passed.
+ *
+ * @param readings [{ read_at_utc, delta_gallons }] any order
+ * @returns [{ start, end, minutes, gallons, rate, level }] oldest first; level 'running'|'long'|'continuous'
+ */
+function run_spans(readings, cfg) {
+  const gap_ms = Math.max(1, Number(cfg.run_gap_min) || 5) * 60000;
+  const warn = Math.max(1, Number(cfg.run_warn_min) || 30);
+  const alarm = Math.max(warn + 1, Number(cfg.run_alarm_min) || 60);
+  if (!readings || !readings.length) return [];
+
+  const flow = readings
+    .map(function (r) {
+      const raw = r.read_at_utc instanceof Date ? r.read_at_utc : new Date(String(r.read_at_utc).replace(' ', 'T') + 'Z');
+      return { t: raw.getTime(), gal: Number(r.delta_gallons) || 0 };
+    })
+    .filter(function (r) { return Number.isFinite(r.t) && r.gal > 0; })
+    .sort(function (a, b) { return a.t - b.t; });
+  if (!flow.length) return [];
+
+  const spans = [];
+  let cur = { first: flow[0].t, last: flow[0].t, gal: flow[0].gal };
+  for (let i = 1; i < flow.length; i++) {
+    if (flow[i].t - cur.last <= gap_ms) {
+      cur.last = flow[i].t;
+      cur.gal += flow[i].gal;
+    } else {
+      spans.push(cur);
+      cur = { first: flow[i].t, last: flow[i].t, gal: flow[i].gal };
+    }
+  }
+  spans.push(cur);
+
+  return spans.map(function (sp) {
+    // A single reading is a run of zero length, not of zero duration — report the minutes between
+    // first and last tick, which is the only interval we actually observed water in.
+    const minutes = (sp.last - sp.first) / 60000;
+    return {
+      start: new Date(sp.first).toISOString(),
+      end: new Date(sp.last).toISOString(),
+      minutes: Math.round(minutes),
+      gallons: sp.gal,
+      rate: minutes > 0 ? sp.gal / minutes : 0,
+      level: minutes >= alarm ? 'continuous' : minutes >= warn ? 'long' : 'running',
+    };
+  });
+}
+
 module.exports = {
   sum_hours, overnight_keys,
-  check_overnight, check_continuous, check_watchdog, daily_summary, current_run,
+  check_overnight, check_continuous, check_watchdog, daily_summary, current_run, run_spans,
   evaluate, status, ALERT_CATALOG,
 };

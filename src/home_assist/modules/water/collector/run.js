@@ -240,6 +240,10 @@ async function create_collector(options) {
       await readings.record_reception(meter_id, now, {
         packets_total: rx_total,
         packets_ours: rx_ours,
+        // The meter reading as of this minute — this is what the heartbeat chart draws. Written
+        // every minute whether or not it changed, so the line exists continuously rather than only
+        // where water happened to move.
+        odometer: last ? last.gallons : null,
         other_ids: Array.from(ids_seen.entries())
           .filter(function (e) { return Number(e[0]) !== Number(cfg.meter_id); })
           .sort(function (a, b) { return b[1] - a[1]; })

@@ -63,4 +63,5 @@ export const api = {
   waterRaw: (limit) => jget('/api/water/raw?limit=' + (limit || 20)),
   waterReference: () => jget('/api/water/reference'),
   waterReception: (minutes) => jget('/api/water/reception?minutes=' + (minutes || 60)),
+  waterMeter: (q) => jget('/api/water/meter?' + new URLSearchParams(q).toString()),
 };

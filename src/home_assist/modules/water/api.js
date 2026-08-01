@@ -135,9 +135,89 @@ function mount(app) {
       retention: {
         raw_sample_keep: cfg.raw_sample_keep,
         readings_retention_days: cfg.readings_retention_days,
+        reception_retention_days: cfg.reception_retention_days,
         alerts_retention_days: cfg.alerts_retention_days,
       },
       meter: { id: cfg.meter_id, name: cfg.meter_name, gallons_per_unit: cfg.gallons_per_unit },
+    });
+  }));
+
+  // ── the Monitor's meter card: two modes behind one endpoint ──────────────────────────────
+  //
+  // heartbeat  the reading minute-by-minute + the packet pulse + where the runs were  (<= 72h)
+  // long       daily totals from the hourly rollup                                    (any range)
+  //
+  // One endpoint rather than two so the card can switch modes without the UI having to know which
+  // table backs which mode — and so `sql` below can always describe what was actually run.
+  app.get('/api/water/meter', require_panel('water'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const tz = time.zone();
+    const now = new Date();
+    const meter_id = cfg.meter_id;
+    const mode = req.query.mode === 'long' ? 'long' : 'heartbeat';
+
+    // 72h is a deliberate ceiling on the detailed mode: past that, per-minute rows stop being
+    // readable on an 800px chart and the long view is the honest answer.
+    const HEARTBEAT_MAX_HOURS = 72;
+
+    const state = await readings.get_state(meter_id);
+    const last_read_at = state && state.last_read_at_utc ? new Date(state.last_read_at_utc + 'Z') : null;
+    const live = {
+      odometer: state && state.last_gallons !== null ? Number(state.last_gallons) : null,
+      last_read_at: last_read_at ? last_read_at.toISOString() : null,
+      seconds_since_last: last_read_at ? Math.max(0, Math.round((now - last_read_at) / 1000)) : null,
+    };
+
+    if (mode === 'long') {
+      const days = Math.max(1, Math.min(Number(req.query.days) || 30, 400));
+      const series = await readings.daily_series_range(meter_id, days);
+      const observed = series.filter(function (d) { return d.observed; });
+      const avg = observed.length
+        ? observed.reduce(function (a, d) { return a + d.gallons; }, 0) / observed.length : 0;
+      return res.json({
+        ok: true, mode, tz, days, live,
+        series,
+        summary: {
+          total: series.reduce(function (a, d) { return a + d.gallons; }, 0),
+          avg_day: avg,
+          // "Unusual" is relative to this window, not an absolute — a house that uses 40 gal/day and
+          // one that uses 400 both deserve the same treatment.
+          high_threshold: avg * 1.5,
+        },
+        sql: long_sql(meter_id, days),
+      });
+    }
+
+    const hours = Math.max(1, Math.min(Number(req.query.hours) || HEARTBEAT_MAX_HOURS, HEARTBEAT_MAX_HOURS));
+    const [rx, recent] = await Promise.all([
+      readings.reception_series(meter_id, hours * 60),
+      readings.recent_readings(meter_id, 500),
+    ]);
+
+    // Only the readings inside the window get spans — a run that ended before the window opened
+    // would draw a band with no line under it.
+    const cutoff = now.getTime() - hours * 3600 * 1000;
+    const in_window = recent.filter(function (r) {
+      return new Date(String(r.read_at_utc).replace(' ', 'T') + 'Z').getTime() >= cutoff;
+    });
+
+    res.json({
+      ok: true, mode, tz, hours, live,
+      max_hours: HEARTBEAT_MAX_HOURS,
+      series: rx.map(function (r) {
+        return {
+          minute_utc: new Date(r.minute_utc + 'Z').toISOString(),
+          minute_mtn: r.minute_mtn,
+          odometer: r.odometer === null ? null : Number(r.odometer),
+          packets: Number(r.packets_ours),
+          rssi: r.rssi_avg === null ? null : Number(r.rssi_avg),
+          snr: r.snr_avg === null ? null : Number(r.snr_avg),
+        };
+      }),
+      runs: rules.run_spans(in_window, cfg),
+      run: rules.current_run(recent, now, cfg),
+      overnight: [cfg.overnight_start_hour, cfg.overnight_end_hour],
+      sql: heartbeat_sql(meter_id, hours),
     });
   }));
 
@@ -252,6 +332,45 @@ function mount(app) {
     );
     res.json({ ok: true, samples: rows });
   }));
+}
+
+
+// The SQL shown in the card's "Data source & SQL" panel.
+//
+// Built from the SAME parameters the queries above actually used, so what the panel displays can be
+// pasted into Workbench and return the rows the chart drew. A hand-written copy would drift.
+function heartbeat_sql(meter_id, hours) {
+  return [
+    { label: 'Reading + pulse', table: 'water_reception', text:
+      'SELECT minute_mtn, odometer, packets_ours\n' +
+      'FROM   water_reception\n' +
+      'WHERE  meter_id   = ' + meter_id + '\n' +
+      '  AND  minute_utc >= (UTC_TIMESTAMP() - INTERVAL ' + hours + ' HOUR)\n' +
+      'ORDER BY minute_utc;   -- odometer = the line, packets_ours = the pulse' },
+    { label: 'Runs (the red bands)', table: 'water_readings', text:
+      'SELECT read_at_utc, delta_gallons\n' +
+      'FROM   water_readings\n' +
+      'WHERE  meter_id    = ' + meter_id + '\n' +
+      '  AND  read_at_utc >= (UTC_TIMESTAMP() - INTERVAL ' + hours + ' HOUR)\n' +
+      'ORDER BY read_at_utc;   -- grouped into runs by run_gap_min' },
+    { label: 'Live tip', table: 'water_collector_state', text:
+      'SELECT last_gallons, last_read_at_utc\n' +
+      'FROM   water_collector_state WHERE meter_id = ' + meter_id + ';' },
+  ];
+}
+
+function long_sql(meter_id, days) {
+  return [
+    { label: 'Daily totals', table: 'water_hourly', text:
+      'SELECT LEFT(hour_key, 10) AS day_key, SUM(gallons) AS gallons\n' +
+      'FROM   water_hourly\n' +
+      'WHERE  meter_id  = ' + meter_id + '\n' +
+      '  AND  hour_key >= \'' + require('../../time').day_key_offset(new Date(), days - 1) + 'T00\'\n' +
+      'GROUP BY day_key ORDER BY day_key;   -- local (MTN) hour keys' },
+    { label: 'Live tip', table: 'water_collector_state', text:
+      'SELECT last_gallons, last_read_at_utc\n' +
+      'FROM   water_collector_state WHERE meter_id = ' + meter_id + ';' },
+  ];
 }
 
 module.exports = { mount };

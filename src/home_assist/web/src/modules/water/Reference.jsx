@@ -204,16 +204,75 @@ export default function Reference() {
         forceKey={force.key}
         actions={<Link className="muted small" to="/water/settings">Change these →</Link>}
       >
+        <p className="w-chart-sub">
+          Each table stores one <em>level</em> of detail, and each level is either bounded by a prune
+          or small enough that it never needs one. The radio hears the meter roughly every 4 seconds —
+          about <strong>780,000 packets a year</strong> — and none of them is stored as a row. What
+          gets kept is the summary at the resolution that level is actually read at. That is the whole
+          reason the database stays in the tens of megabytes rather than the gigabytes.
+        </p>
         <table className="w-table">
-          <thead><tr><th>Table</th><th>Holds</th><th>Kept</th></tr></thead>
+          <thead><tr><th>Table</th><th>One row is</th><th>Rows/year</th><th>Kept</th></tr></thead>
           <tbody>
-            <tr><td><code>water_hourly</code></td><td>Hourly rollup — every chart and every rule reads this</td><td><strong>Forever</strong> (8,760 rows/yr)</td></tr>
-            <tr><td><code>water_readings</code></td><td>Per-reading detail, one row per gallon used</td><td>{ref.retention.readings_retention_days ? ref.retention.readings_retention_days + ' days' : 'forever (~10 MB/yr)'}</td></tr>
-            <tr><td><code>water_alerts</code></td><td>Alert history <em>and</em> the cooldown ledger</td><td>{ref.retention.alerts_retention_days ? ref.retention.alerts_retention_days + ' days' : 'forever'}</td></tr>
-            <tr><td><code>water_raw_samples</code></td><td>Raw decoder lines, for field-name forensics</td><td>last {ref.retention.raw_sample_keep} rows</td></tr>
+            <tr>
+              <td><code>water_hourly</code></td>
+              <td>One hour of use. Every chart and every leak rule reads this.</td>
+              <td>8,760</td>
+              <td><strong>Forever</strong> — ~1 MB/yr. Never worth pruning.</td>
+            </tr>
+            <tr>
+              <td><code>water_readings</code></td>
+              <td>One accepted reading — written only when the odometer <em>moves</em>, so roughly one
+                row per gallon used.</td>
+              <td>~50,000 at 130 gal/day</td>
+              <td>{ref.retention.readings_retention_days
+                ? ref.retention.readings_retention_days + ' days'
+                : 'forever (~6 MB/yr)'}</td>
+            </tr>
+            <tr>
+              <td><code>water_reception</code></td>
+              <td>One minute of radio reception — packet counts, signal, and the odometer at the end
+                of that minute. This is the heartbeat chart.</td>
+              <td>525,600 <span className="muted small">if never pruned</span></td>
+              <td><strong>{ref.retention.reception_retention_days || 14} days</strong> — a hard cap of
+                about {((ref.retention.reception_retention_days || 14) * 1440).toLocaleString()} rows,
+                pruned hourly.</td>
+            </tr>
+            <tr>
+              <td><code>water_alerts</code></td>
+              <td>One alert. Also the cooldown ledger.</td>
+              <td>a few hundred</td>
+              <td>{ref.retention.alerts_retention_days ? ref.retention.alerts_retention_days + ' days' : 'forever'}</td>
+            </tr>
+            <tr>
+              <td><code>water_raw_samples</code></td>
+              <td>A raw decoder line, kept for field-name forensics.</td>
+              <td className="muted">capped, not accumulated</td>
+              <td>last {ref.retention.raw_sample_keep} rows, trimmed hourly</td>
+            </tr>
+            <tr>
+              <td><code>water_collector_state</code></td>
+              <td>Where the meter is right now.</td>
+              <td className="muted">—</td>
+              <td><strong>Exactly one row</strong>, updated in place, per meter.</td>
+            </tr>
+            <tr>
+              <td><code>water_settings</code></td>
+              <td>One tunable setting.</td>
+              <td className="muted">—</td>
+              <td>~30 rows, updated in place.</td>
+            </tr>
           </tbody>
         </table>
         <p className="w-chart-sub small" style={{ marginTop: 10 }}>
+          <strong>The one table that could run away is <code>water_reception</code></strong>, because it
+          writes a row every minute whether or not water moves — that is exactly what makes it able to
+          prove the radio is alive during a flat line. It is also the only one with a hard, always-on
+          prune. At {ref.retention.reception_retention_days || 14} days it settles at a fixed size and
+          stops growing; the long view reads <code>water_hourly</code> instead, which is why history
+          past two weeks costs nothing.
+        </p>
+        <p className="w-chart-sub small" style={{ marginTop: 6 }}>
           <strong>Do not</strong> set alert retention below the longest cooldown ({dur(20 * 60)}) —
           that table is also the cooldown ledger, so pruning it too aggressively would let an alert
           repeat immediately.

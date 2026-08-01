@@ -2,7 +2,7 @@
 
 Snapshot of what's built and what's next. Platform-level status is in `../STATUS.md`.
 
-Last updated: 2026-08-01 (live hardware; three bugs found from the real tables — see Verified on real hardware).
+Last updated: 2026-08-01 (Monitor redesign: the meter card, per-minute heartbeat, collapsible cards and exports).
 
 ## What it is
 
@@ -16,11 +16,12 @@ first module. Two processes:
 
 | path | panel | what |
 |---|---|---|
-| `/water/monitor` | `water` | verdict banner, receiver strip, tiles, 48h chart, recent alerts |
+| `/water/monitor` | `water` | verdict banner, tiles, the **meter card** (Heartbeat / Long view), 48h bars, recent alerts |
 | `/water/history` | `water` | hourly (24/48/72/168h) + daily (14/30/90d), table toggle |
 | `/water/alerts` | `water` | full alert history with delivery status |
 | `/water/settings` | `water-admin` | every threshold, email config, test alert |
-| `/water/diagnostics` | `water-admin` | raw decoder lines, SMTP verify, recent readings |
+| `/water/diagnostics` | `water-admin` | raw decoder lines, SMTP verify, recent readings, live reception |
+| `/water/reference` | `water` | alert schedule, delivery, retention — read from the running config |
 
 ## Done
 
@@ -147,12 +148,18 @@ prints this live, projected from readings actually observed:
 
 | table | growth | bounded by |
 |---|---|---|
-| `water_readings` | one row per **gallon used** — ~200/day, ~73k/yr, **~4 MB/yr** | `readings_retention_days` (default 0 = keep) |
-| `water_hourly` | fixed **8,760 rows/yr** (~1 MB/yr) regardless of usage | never pruned — it is what every chart and rule reads |
+| `water_readings` | one row per **gallon used** -- ~200/day, ~73k/yr, **~4 MB/yr** | `readings_retention_days` (default 0 = keep) |
+| `water_hourly` | fixed **8,760 rows/yr** (~1 MB/yr) regardless of usage | never pruned -- it is what every chart and rule reads |
+| `water_reception` | **1,440 rows/day**, written every minute whether or not water moves | `reception_retention_days` (default 14) -- settles at ~20,160 rows and stops growing |
 | `water_alerts` | a few hundred a year | `alerts_retention_days` (default 0 = keep) |
 | `water_collector_state` | one row, upserted | n/a |
-| `water_settings` | ~20 rows | n/a |
+| `water_settings` | ~30 rows | n/a |
 | `water_raw_samples` | diagnostic buffer | `raw_sample_keep` (default 500), swept hourly |
+
+`water_reception` is the only table that grows on a **timer** rather than on usage, which is exactly
+what makes it able to prove the radio is alive during a flat line -- and exactly why it is the only
+one with a hard, always-on prune. The Reference panel says all of this in the UI, sourced from the
+same settings rows.
 
 So the answer is roughly **5 MB a year**, and the defaults keep everything — deliberately, since
 losing history to save 5 MB is a bad trade.
@@ -175,6 +182,34 @@ Fixed:
 
 Verified end to end: with `max_gal_per_min` forced to 0.01 so every packet is rejected, ~40 rejected
 packets over 40s produced exactly **10 rows** and 10 log lines.
+
+## The Monitor redesign (2026-08-01)
+
+The Monitor page was rebuilt around one question: *is water running right now, and am I even being
+read?* The pieces, and why each exists:
+
+| piece | what it is | why |
+|---|---|---|
+| **Meter card, Heartbeat mode** | per-minute odometer line + a green packet pulse, up to 72h, from `water_reception` | a flat reading with a healthy pulse means nobody used water; a flat reading with a **flatline** means the number on screen is stale. Those look identical on any single-line chart |
+| **Meter card, Long view** | daily bars over any range, from `water_hourly` | past 72 hours per-minute rows are unreadable, and the rollup is the honest answer |
+| **Run bands** | coloured spans where a continuous run happened (`run_spans`) | at 72 hours you need to see *when* it happened, not only that it is happening now |
+| **Collapsible cards** | every card collapses; all start closed **except the meter** | the meter is why the page exists. Everything else is context you go looking for |
+| **CardTools** | Expand / PNG / CSV per card, ported from usat_apps' merge panel | same toolbar, same behaviour as the other app |
+| **SqlPanel** | the exact SQL each chart ran, built server-side from the same parameters | a chart you cannot reproduce is a chart you cannot argue with |
+
+Two bugs found and fixed while verifying it:
+
+1. **`reception_series` capped at 1440 minutes while the API allowed 72 hours.** Asking for 72h
+   silently returned 24h -- the chip said 72h, the axis drew a day, nothing failed. Pinned by
+   `tests/window_caps.test.js`, which asserts the two ceilings agree.
+2. **PNG export painted every water colour `#888`.** `CardTools` resolved CSS variables against
+   `document.documentElement`, but the water palette is scoped to `.w-root` so it cannot leak into
+   another module -- so every lookup returned empty and fell back to grey. The overnight band, a 5%
+   tint on screen, exported as an opaque slab. Now resolved against the chart's own element.
+
+A third was designed out rather than fixed: the chart downsamples to one column per ~2px, and the
+packet aggregate is **MIN over the bucket**, not average. A one-minute outage inside a four-minute
+bucket still draws a flatline. On a monitor the worst minute is the one worth seeing.
 
 ## Open items
 

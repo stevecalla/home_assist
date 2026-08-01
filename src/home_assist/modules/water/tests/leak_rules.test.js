@@ -344,3 +344,53 @@ test('status: silence still outranks a run — being blind is worse', function (
   const s = rules.status({ hours: {}, now: MORNING, cfg: cfg, tz: TZ, last_read_at: old, run: run });
   assert.strictEqual(s.state, 'offline', 'a stale run reading must not mask a dead receiver');
 });
+
+// ───────────────────────── run_spans (the red bands on the chart) ─────────────────────────
+
+test('run_spans: no flow means no spans', function () {
+  assert.deepStrictEqual(rules.run_spans([], cfg), []);
+  assert.deepStrictEqual(rules.run_spans(reads([[5, 0], [9, 0]]), cfg), []);
+});
+
+test('run_spans: two showers separated by a gap are TWO runs', function () {
+  // The whole point of the function: current_run only ever sees the newest one. A chart that
+  // merged these would draw one 40-minute band across a period when nothing was running.
+  const spec = [];
+  for (let m = 0; m <= 8; m++) spec.push([m, 2]);          // recent, 8 min
+  for (let m = 40; m <= 50; m++) spec.push([m, 2]);        // earlier, 10 min
+  const spans = rules.run_spans(reads(spec), cfg);
+  assert.strictEqual(spans.length, 2);
+  assert.strictEqual(spans[0].minutes, 10, 'oldest first');
+  assert.strictEqual(spans[1].minutes, 8);
+});
+
+test('run_spans: levels match the thresholds', function () {
+  const short = [], long = [], alarm = [];
+  for (let m = 200; m <= 210; m++) short.push([m, 1]);     // 10 min
+  for (let m = 100; m <= 140; m++) long.push([m, 1]);      // 40 min
+  for (let m = 0; m <= 70; m++) alarm.push([m, 1]);        // 70 min
+  const spans = rules.run_spans(reads(short.concat(long).concat(alarm)), cfg);
+  assert.deepStrictEqual(spans.map(function (s) { return s.level; }), ['running', 'long', 'continuous']);
+});
+
+test('run_spans: a slow leak stays ONE span, not many short ones', function () {
+  // Same trap as current_run: at 0.4 gal/min the meter only ticks every ~2.5 min. A gap threshold
+  // below that would chop a genuine 90-minute leak into 30 innocent-looking bands.
+  const spec = [];
+  for (let m = 0; m <= 90; m += 3) spec.push([m, 1]);
+  const spans = rules.run_spans(reads(spec), cfg);
+  assert.strictEqual(spans.length, 1);
+  assert.strictEqual(spans[0].level, 'continuous');
+});
+
+test('run_spans: agrees with current_run about the newest run', function () {
+  // Two functions, one definition of "a run". If these ever disagree the banner and the chart
+  // contradict each other, which is the failure mode we already fixed once.
+  const spec = [];
+  for (let m = 0; m <= 75; m++) spec.push([m, 1]);
+  const now = rules.current_run(reads(spec), NOW, cfg);
+  const spans = rules.run_spans(reads(spec), cfg);
+  const newest = spans[spans.length - 1];
+  assert.strictEqual(newest.level, now.level);
+  assert.strictEqual(newest.gallons, now.gallons);
+});

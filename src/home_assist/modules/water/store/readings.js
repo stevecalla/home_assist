@@ -99,14 +99,17 @@ async function record_reception(meter_id, at, stats) {
   try {
     await db.query(
       'INSERT INTO water_reception (meter_id, minute_utc, minute_mtn, packets_total, packets_ours, ' +
-      'other_ids, rssi_avg, rssi_best, snr_avg, created_at_mtn, created_at_utc) ' +
-      'VALUES (?,?,?,?,?,?,?,?,?,?,?) ' +
+      'odometer, other_ids, rssi_avg, rssi_best, snr_avg, created_at_mtn, created_at_utc) ' +
+      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ' +
       'ON DUPLICATE KEY UPDATE packets_total = packets_total + VALUES(packets_total), ' +
       'packets_ours = packets_ours + VALUES(packets_ours), other_ids = VALUES(other_ids), ' +
+      // odometer is the LATEST value in the minute, not a sum — it is a running total already.
+      'odometer = COALESCE(VALUES(odometer), odometer), ' +
       'rssi_avg = VALUES(rssi_avg), rssi_best = VALUES(rssi_best), snr_avg = VALUES(snr_avg)',
       [
         meter_id, s.utc, s.local,
         stats.packets_total || 0, stats.packets_ours || 0,
+        stats.odometer === null || stats.odometer === undefined ? null : stats.odometer,
         stats.other_ids ? String(stats.other_ids).slice(0, 250) : null,
         stats.rssi_avg === null || stats.rssi_avg === undefined ? null : stats.rssi_avg,
         stats.rssi_best === null || stats.rssi_best === undefined ? null : stats.rssi_best,
@@ -119,14 +122,37 @@ async function record_reception(meter_id, at, stats) {
 
 /** The last N minutes of reception, oldest first — what the Diagnostics chart draws. */
 async function reception_series(meter_id, minutes) {
-  const n = Math.max(1, Math.min(Number(minutes) || 60, 1440));
+  // 4320 = 72 hours, the same ceiling /api/water/meter enforces on the heartbeat window. A lower cap
+  // here would silently truncate a 72h request to 24h and the chart would draw a confident, wrong
+  // axis — the range chip would say 72h and the picture would be a day.
+  const n = Math.max(1, Math.min(Number(minutes) || 60, 4320));
   const rows = await db.query(
-    'SELECT minute_utc, minute_mtn, packets_total, packets_ours, other_ids, rssi_avg, rssi_best, snr_avg ' +
+    'SELECT minute_utc, minute_mtn, packets_total, packets_ours, odometer, other_ids, rssi_avg, rssi_best, snr_avg ' +
     'FROM water_reception WHERE meter_id = ? AND minute_utc >= (UTC_TIMESTAMP() - INTERVAL ? MINUTE) ' +
     'ORDER BY minute_utc',
     [meter_id, n]
   );
   return rows;
+}
+
+/** Daily totals over an explicit day range, grouped in SQL so the browser gets one row per DAY. */
+async function daily_series_range(meter_id, days) {
+  const n = Math.max(1, Math.min(Number(days) || 30, 400));
+  const first = time.day_key_offset(new Date(), n - 1);
+  const rows = await db.query(
+    'SELECT LEFT(hour_key, 10) AS day_key, SUM(gallons) AS gallons, SUM(reading_count) AS readings ' +
+    'FROM water_hourly WHERE meter_id = ? AND hour_key >= ? GROUP BY day_key ORDER BY day_key',
+    [meter_id, first + 'T00']
+  );
+  const by = {};
+  rows.forEach(function (r) { by[r.day_key] = { gallons: Number(r.gallons), readings: Number(r.readings) }; });
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const k = time.day_key_offset(new Date(), i);
+    const hit = by[k];
+    out.push({ day_key: k, gallons: hit ? hit.gallons : 0, readings: hit ? hit.readings : 0, observed: !!hit });
+  }
+  return out;
 }
 
 async function prune_reception(days) {
@@ -293,6 +319,6 @@ async function recent_readings(meter_id, limit) {
 module.exports = {
   insert_reading, bump_hour, save_state, get_state, log_raw,
   prune_raw, prune_readings, prune_alerts, table_sizes,
-  record_reception, reception_series, prune_reception,
+  record_reception, reception_series, prune_reception, daily_series_range,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,
 };

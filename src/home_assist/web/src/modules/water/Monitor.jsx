@@ -1,18 +1,23 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import BarChart from './BarChart.jsx';
-import LiveChart from './LiveChart.jsx';
+import HeartbeatChart from './HeartbeatChart.jsx';
+import CollapsibleCard from '../../components/CollapsibleCard.jsx';
+import CardTools from '../../components/CardTools.jsx';
+import SqlPanel from './SqlPanel.jsx';
 import './water.css';
 
-// The Monitor — the page you actually open when you wonder "is water running right now?"
+// The Monitor — the page you open when you wonder "is water running right now?"
 //
 // Ordered by what matters: the verdict first (a leak monitor whose answer you have to hunt for has
-// failed), then whether the receiver is even alive, then the numbers, then the shape of the day.
+// failed), then whether the receiver is even alive, then the numbers, then the meter itself.
 //
-// Polls every 5s. A poll rather than SSE because on a LAN this is free and the failure mode is
-// obvious; the meter only broadcasts every few seconds anyway.
-const POLL_MS = 5000;
+// EVERY card below is collapsible and every card except the meter starts CLOSED. The meter card is
+// the reason the page exists — the continuous-run readout and the heartbeat — so it is the one
+// thing you should never have to click to see. The rest is context you go looking for.
+const POLL_MS = 5000;          // status: the banner, the tiles, the run meter
+const SERIES_MS = 30000;       // the meter series: 4,000-odd rows, not worth re-fetching every 5s
 
 const BANNER = {
   ok:      { icon: '✓', cls: 'ok' },
@@ -26,9 +31,12 @@ const BANNER = {
 const RUN = {
   idle:       { icon: '○', word: 'Idle',       note: () => '' },
   running:    { icon: '💧', word: 'Running',    note: (r) => `normal so far — flagged past ${fmtDur(r.warn_min)}` },
-  long:       { icon: '⏱', word: 'Running a long time', note: (r) => `longer than a shower or a dishwasher cycle — worth a look` },
+  long:       { icon: '⏱', word: 'Running a long time', note: () => 'longer than a shower or a dishwasher cycle — worth a look' },
   continuous: { icon: '⚠', word: 'CONTINUOUS FLOW', note: (r) => `over ${fmtDur(r.alarm_min)} unbroken — that is not a fixture` },
 };
+
+const HOUR_CHIPS = [1, 6, 24, 72];
+const DAY_CHIPS = [7, 30, 90, 365];
 
 function fmtDur(min) {
   const m = Math.max(0, Math.round(min));
@@ -38,57 +46,61 @@ function fmtDur(min) {
   return rest ? `${h}h ${rest}m` : `${h}h`;
 }
 
-// How much of the live tape to keep, and therefore how far back the live chart looks.
-const LIVE_WINDOW_MS = 30 * 60 * 1000;          // 30 minutes
-const LIVE_MAX_POINTS = Math.ceil(LIVE_WINDOW_MS / POLL_MS) + 10;
-
 export default function Monitor() {
   const [status, setStatus] = useState(null);
   const [hourly, setHourly] = useState(null);
   const [alerts, setAlerts] = useState(null);
-  const [live, setLive] = useState([]);
+  const [meter, setMeter] = useState(null);
   const [err, setErr] = useState('');
 
-  const load = useCallback(async (withCharts) => {
+  // Meter-card controls
+  const [mode, setMode] = useState('heartbeat');
+  const [hours, setHours] = useState(72);
+  const [days, setDays] = useState(30);
+  const [hoursText, setHoursText] = useState('72');
+  const [daysText, setDaysText] = useState('30');
+
+  // Expand all / Collapse all. `forceKey` is what makes a repeated command work — see
+  // CollapsibleCard for why a bare boolean is not enough.
+  const [force, setForce] = useState({ open: undefined, key: 0 });
+  const forceAll = (open) => setForce((f) => ({ open, key: f.key + 1 }));
+
+  const hbRef = useRef(null);
+  const longRef = useRef(null);
+  const hourlyRef = useRef(null);
+
+  const loadStatus = useCallback(async () => {
     const s = await api.waterStatus();
-    if (s.status === 200 && s.body.ok) {
-      setStatus(s.body);
-      setErr('');
-      // The live tape. Built client-side from the poll we already make, rather than from a new
-      // table: the collector writes a reading only when gallons MOVE, so a server-side series
-      // would be empty exactly when you are staring at it wondering whether anything is alive.
-      const odo = s.body.meter && s.body.meter.odometer_gallons;
-      const readAt = s.body.receiver && s.body.receiver.last_read_at;
-      if (typeof odo === 'number' && Number.isFinite(odo)) {
-        // Stamp with the meter's own last-heard time, not the browser clock — if the collector
-        // goes deaf the tape must stop advancing, not keep drawing a confident flat line.
-        const t = readAt ? new Date(readAt).getTime() : Date.now();
-        setLive((prev) => {
-          const lastPt = prev[prev.length - 1];
-          if (lastPt && lastPt.t === t && lastPt.gallons === odo) return prev;   // nothing new
-          // A meter rollover (or a reset) would otherwise render as one enormous negative cliff.
-          const next = lastPt && odo < lastPt.gallons ? [] : prev;
-          const out = next.concat({ t, gallons: odo });
-          const cutoff = t - LIVE_WINDOW_MS;
-          const trimmed = out.filter((p) => p.t >= cutoff);
-          return trimmed.length > LIVE_MAX_POINTS ? trimmed.slice(-LIVE_MAX_POINTS) : trimmed;
-        });
-      }
-    } else setErr(s.body.error || 'Could not load status');
-    if (withCharts) {
-      const h = await api.waterHourly(48);
-      if (h.status === 200 && h.body.ok) setHourly(h.body);
-      const a = await api.waterAlerts(5);
-      if (a.status === 200 && a.body.ok) setAlerts(a.body.alerts);
-    }
+    if (s.status === 200 && s.body.ok) { setStatus(s.body); setErr(''); }
+    else setErr(s.body.error || 'Could not load status');
+  }, []);
+
+  const loadSeries = useCallback(async () => {
+    const q = mode === 'long' ? { mode: 'long', days } : { mode: 'heartbeat', hours };
+    const m = await api.waterMeter(q);
+    if (m.status === 200 && m.body.ok) setMeter(m.body);
+  }, [mode, hours, days]);
+
+  const loadSlow = useCallback(async () => {
+    const h = await api.waterHourly(48);
+    if (h.status === 200 && h.body.ok) setHourly(h.body);
+    const a = await api.waterAlerts(5);
+    if (a.status === 200 && a.body.ok) setAlerts(a.body.alerts);
   }, []);
 
   useEffect(() => {
-    load(true);
-    const id = setInterval(() => load(false), POLL_MS);
-    const idCharts = setInterval(() => load(true), 60000);
-    return () => { clearInterval(id); clearInterval(idCharts); };
-  }, [load]);
+    loadStatus();
+    loadSlow();
+    const id = setInterval(loadStatus, POLL_MS);
+    const idSlow = setInterval(loadSlow, 60000);
+    return () => { clearInterval(id); clearInterval(idSlow); };
+  }, [loadStatus, loadSlow]);
+
+  useEffect(() => {
+    loadSeries();
+    const id = setInterval(loadSeries, SERIES_MS);
+    return () => clearInterval(id);
+  }, [loadSeries]);
 
   if (err && !status) return <div className="page"><p className="err">{err}</p></div>;
   if (!status) return <div className="loading">Loading…</div>;
@@ -100,21 +112,6 @@ export default function Monitor() {
   // Tolerate an older server that predates /api/water/status returning `run`.
   const run = status.run || { flowing: false, level: 'idle', minutes: 0, gallons: 0, rate: 0, idle_minutes: null };
 
-  // Live-tape summary. All derived from the same buffer the chart draws, so the headline number and
-  // the line can never disagree.
-  const liveFirst = live.length ? live[0] : null;
-  const liveLast = live.length ? live[live.length - 1] : null;
-  const liveUsed = liveFirst && liveLast ? Math.max(0, liveLast.gallons - liveFirst.gallons) : 0;
-
-  // NOTE: "is water running" is answered ONCE, by the server (`run`), and both the header badge and
-  // the run card read from it. An earlier version recomputed it here from the client tape; the two
-  // then disagreed whenever a packet was rejected or the tape had just been reset, and a monitor
-  // that contradicts itself in two adjacent elements teaches you to trust neither.
-
-  // The meter has stopped reporting. The chart stops rather than extending a flat line, because a
-  // flat line here would assert "no water is being used" when the honest answer is "we cannot see".
-  const liveStale = !!(liveLast && Date.now() - liveLast.t > POLL_MS * 6);
-
   const bars = (hourly ? hourly.series : []).map((s) => ({
     key: s.hour_key,
     label: String(s.hour).padStart(2, '0'),
@@ -123,17 +120,49 @@ export default function Monitor() {
     highlight: s.hour >= t.overnight_window[0] && s.hour < t.overnight_window[1],
   }));
 
+  // ── the meter card's numbers ───────────────────────────────────────────────────────────────
+  const hb = meter && meter.mode === 'heartbeat' ? meter : null;
+  const lv = meter && meter.mode === 'long' ? meter : null;
+  const pts = hb ? hb.series.filter((p) => p.odometer !== null && p.odometer !== undefined) : [];
+  const usedInWindow = pts.length >= 2 ? Math.max(0, pts[pts.length - 1].odometer - pts[0].odometer) : 0;
+  const recentPulse = pts.slice(-10);
+  const pulseAvg = recentPulse.length
+    ? recentPulse.reduce((a, p) => a + (p.packets || 0), 0) / recentPulse.length : 0;
+  const snrPts = pts.filter((p) => p.snr !== null && p.snr !== undefined).slice(-10);
+  const snrAvg = snrPts.length ? snrPts.reduce((a, p) => a + p.snr, 0) / snrPts.length : null;
+  const liveOdo = (meter && meter.live && meter.live.odometer) !== null && meter && meter.live
+    ? meter.live.odometer
+    : status.meter.odometer_gallons;
+
+  // Export rows follow the chart on screen, so a CSV can always be reconciled with the picture.
+  const hbHeaders = ['minute_mtn', 'odometer_gallons', 'packets', 'rssi_db', 'snr_db'];
+  const hbRows = hb ? hb.series.map((p) => [p.minute_mtn, p.odometer, p.packets, p.rssi, p.snr]) : [];
+  const lvHeaders = ['day_key', 'gallons', 'observed'];
+  const lvRows = lv ? lv.series.map((d) => [d.day_key, d.gallons.toFixed(1), d.observed ? 'yes' : 'no']) : [];
+
+  const commit = (text, setVal, setText, max) => {
+    const n = Math.max(1, Math.min(Math.round(Number(text)) || 1, max));
+    setVal(n); setText(String(n));
+  };
+
   return (
     <div className="page w-root">
-      <h2>Water monitor</h2>
-      <p className="muted">{status.meter_name ? status.meter_name + ' · ' : ''}ID {status.meter_id} · {status.tz}</p>
+      <div className="w-page-head">
+        <div>
+          <h2>Water monitor</h2>
+          <p className="muted">{status.meter_name ? status.meter_name + ' · ' : ''}ID {status.meter_id} · {status.tz}</p>
+        </div>
+        <div className="w-expand-all">
+          <button type="button" onClick={() => forceAll(true)}>Expand all</button>
+          <button type="button" onClick={() => forceAll(false)}>Collapse all</button>
+        </div>
+      </div>
 
       {/* Verdict and receiver health in ONE row.
-          They were two stacked cards, which pushed the live chart below the fold on a laptop — and
+          They were two stacked cards, which pushed the meter chart below the fold on a laptop — and
           the chart is what you open this page to see. They also belong together: "all clear" is
-          only meaningful if the receiver is actually hearing the meter, so reading one without the
-          other is the mistake, not the shortcut. Icon + word still carry the state; color only
-          reinforces it. */}
+          only meaningful if the receiver is actually hearing the meter. Neither this banner nor the
+          tiles below collapse: they are the answer, not the evidence. */}
       <div className={'w-banner ' + b.cls} role="status">
         <span className="w-banner-icon" aria-hidden="true">{b.icon}</span>
         <span className="w-banner-text">
@@ -178,20 +207,71 @@ export default function Monitor() {
         <Tile label="Daily average" value={t.avg_day_7d} note="previous 7 full days" />
       </div>
 
-      {/* The live tape. Sits above the hourly bars because "is water running RIGHT NOW" is the
-          question people open this page to answer; the bars are the shape of the day. */}
-      <div className="w-chart-card">
-        <div className="w-chart-head">
-          <h3 className="w-chart-title">Live — water used in the last 30 minutes</h3>
-          <span className={'w-live-badge ' + (run.flowing ? 'flowing' : 'idle')}>
-            <span className="w-dot-live" aria-hidden="true" />
-            {run.flowing ? `Running · ${run.rate.toFixed(1)} gal/min` : 'Idle'}
+      {/* ── the meter ─────────────────────────────────────────────────────────────────────────
+          The only card that starts open. Two modes behind one toggle:
+            Heartbeat  per-minute reading + the packet pulse, up to 72 hours (water_reception)
+            Long view  daily totals, any range (water_hourly)
+          The pulse is the part that is easy to underrate: a flat reading with a healthy pulse means
+          nobody used water; a flat reading with a flatline means you are not being read at all, and
+          those two look identical on a single-line chart. */}
+      <CollapsibleCard
+        title="Meter — live"
+        defaultOpen
+        forceOpen={force.open}
+        forceKey={force.key}
+        actions={
+          <>
+            <span className="w-seg">
+              <button type="button" className={mode === 'heartbeat' ? 'on' : ''} onClick={() => setMode('heartbeat')}>Heartbeat</button>
+              <button type="button" className={mode === 'long' ? 'on' : ''} onClick={() => setMode('long')}>Long view</button>
+            </span>
+            <CardTools
+              id={mode === 'long' ? 'water-long' : 'water-heartbeat'}
+              title={mode === 'long' ? 'Water — daily totals' : 'Water — meter heartbeat'}
+              svgRef={mode === 'long' ? longRef : hbRef}
+              headers={mode === 'long' ? lvHeaders : hbHeaders}
+              rows={mode === 'long' ? lvRows : hbRows}
+            />
+          </>
+        }
+      >
+        <div className="w-rangebar">
+          <span className="w-range-label">{status.tz.split('/')[1].replace('_', ' ')} time</span>
+          {(mode === 'long' ? DAY_CHIPS : HOUR_CHIPS).map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={'w-chip' + ((mode === 'long' ? days : hours) === n ? ' on' : '')}
+              onClick={() => (mode === 'long'
+                ? (setDays(n), setDaysText(String(n)))
+                : (setHours(n), setHoursText(String(n))))}
+            >
+              {n}{mode === 'long' ? 'd' : 'h'}
+            </button>
+          ))}
+          <input
+            className="w-numin"
+            value={mode === 'long' ? daysText : hoursText}
+            onChange={(e) => (mode === 'long' ? setDaysText(e.target.value) : setHoursText(e.target.value))}
+            onBlur={() => (mode === 'long'
+              ? commit(daysText, setDays, setDaysText, 400)
+              : commit(hoursText, setHours, setHoursText, (hb && hb.max_hours) || 72))}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            aria-label={mode === 'long' ? 'days' : 'hours'}
+          />
+          <span className="w-range-label">{mode === 'long' ? 'days' : 'h'}</span>
+          {mode === 'heartbeat' ? (
+            <span className="w-range-note">max {(hb && hb.max_hours) || 72}h — per-minute rows stop being readable past that</span>
+          ) : null}
+          <span className={'w-livetip ' + (run.flowing ? 'flowing' : 'idle')}>
+            <i aria-hidden="true" />
+            {r.last_read_at ? clockOnly(r.last_read_at, status.tz) : 'no packet yet'}
           </span>
         </div>
 
         {/* Continuous-run meter. THE measurement: every fixture in a house stops on its own, so
             duration without a break is what separates "someone showered" from "something broke".
-            Server-computed, so it survives a page reload and is not capped by the 30-minute tape. */}
+            Server-computed, so it survives a reload and is not capped by the chart window. */}
         <div className={'w-run w-run-' + run.level} role="status">
           <span className="w-run-icon" aria-hidden="true">{RUN[run.level].icon}</span>
           <span className="w-run-body">
@@ -207,70 +287,159 @@ export default function Monitor() {
             </span>
           </span>
         </div>
-        {/* One line, not three paragraphs. The explanation was pushing the chart it explains off
-            the screen; the details live in <details> for the first read and stay closed after. */}
-        <p className="w-chart-sub">
-          <strong>Flat = nothing running.</strong> A step is a fixture; a steady climb is what you
-          are watching for. Left axis gallons used, right axis lifetime total.{' '}
-          <details className="w-inline-note">
-            <summary>Why two axes?</summary>
-            The odometer reads{' '}
-            {status.meter.odometer_gallons === null ? 'six figures' : Number(status.meter.odometer_gallons).toLocaleString()}
-            {' '}gal, so on that scale a shower is invisible. The chart is drawn against gallons used
-            since this window opened; the right axis relabels the same line as the meter&apos;s
-            lifetime total, for cross-checking the dial in the pit against your utility bill. One
-            line, two labels — not two series.
-          </details>
-        </p>
-        <LiveChart
-          points={live}
-          windowMs={LIVE_WINDOW_MS}
-          gapMs={POLL_MS * 4}
-          emptyMessage={
-            r.collector_up
-              ? 'Listening… the first points appear within a few seconds.'
-              : 'The collector is not running, so there is nothing live to show.'
-          }
-        />
-        {live.length >= 2 ? (
-          <p className="muted small" style={{ marginTop: 8 }}>
-            {liveUsed.toFixed(1)} gal over the last {Math.max(1, Math.round((live[live.length - 1].t - live[0].t) / 60000))} min
-            {liveStale ? ' · the meter has gone quiet — the line stops rather than pretending' : ''}
-          </p>
-        ) : null}
-      </div>
 
-      <div className="w-chart-card">
-        <div className="w-chart-head">
-          <h3 className="w-chart-title">Gallons per hour, last 48 hours</h3>
-          <Link className="muted small" to="/water/history">Longer view →</Link>
+        <div className="w-readout">
+          <div>
+            <div className="w-readout-big">
+              {liveOdo === null || liveOdo === undefined ? '—' : Number(liveOdo).toLocaleString()}
+              <span> gal</span>
+            </div>
+            <div className="w-readout-lab">meter reading now</div>
+          </div>
+          {mode === 'heartbeat' ? (
+            <>
+              <div>
+                <div className="w-readout-sm">{usedInWindow.toFixed(1)} gal</div>
+                <div className="w-readout-lab">used in window</div>
+              </div>
+              <div>
+                <div className="w-readout-sm">{pulseAvg.toFixed(1)} /min</div>
+                <div className="w-readout-lab">pulse</div>
+              </div>
+              <div>
+                <div className="w-readout-sm">{snrAvg === null ? '—' : snrAvg.toFixed(1) + ' dB'}</div>
+                <div className="w-readout-lab">signal</div>
+              </div>
+            </>
+          ) : lv ? (
+            <>
+              <div>
+                <div className="w-readout-sm">{lv.summary.total.toFixed(0)} gal</div>
+                <div className="w-readout-lab">total over {lv.days} days</div>
+              </div>
+              <div>
+                <div className="w-readout-sm">{lv.summary.avg_day.toFixed(1)} gal</div>
+                <div className="w-readout-lab">average day</div>
+              </div>
+            </>
+          ) : null}
         </div>
-        <p className="w-chart-sub">
-          The overnight window is shaded. A running toilet shows up as a flat, unbroken row of bars
-          across the shaded band — which is exactly what normal use never looks like.
-        </p>
-        <BarChart
-          data={bars}
-          height={190}
-          formatTip={(d) => (d.observed
-            ? `${d.label}:00 — ${d.value.toFixed(0)} gal`
-            : `${d.label}:00 — no data (receiver was not listening)`)}
-          emptyMessage="No readings yet. Start the collector: npm run water_collector"
-        />
+
+        {mode === 'heartbeat' ? (
+          <>
+            <div ref={hbRef}>
+              <HeartbeatChart
+                series={hb ? hb.series : []}
+                runs={hb ? hb.runs : []}
+                overnight={hb ? hb.overnight : null}
+                height={250}
+                emptyMessage={
+                  r.collector_up
+                    ? 'Listening… the first minute of the heartbeat appears within about a minute.'
+                    : 'The collector is not running, so there is nothing live to show.'
+                }
+              />
+            </div>
+            <div className="w-legend-note">
+              <span><span className="w-swatch series" /><b>Reading</b> — rises only when water moves</span>
+              <span><span className="w-swatch good" /><b>Pulse</b> — packets heard; never flat while the radio works</span>
+              <span><span className="w-swatch critical" /><b>Flatline</b> — a minute with nothing heard</span>
+              <span><span className="w-swatch band" />Overnight window</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div ref={longRef}>
+              <BarChart
+                data={(lv ? lv.series : []).map((d) => ({
+                  key: d.day_key,
+                  label: d.day_key.slice(5),
+                  value: d.gallons,
+                  observed: d.observed,
+                  highlight: lv ? d.gallons > lv.summary.high_threshold : false,
+                }))}
+                height={220}
+                formatTip={(d) => (d.observed
+                  ? `${d.key} — ${d.value.toFixed(0)} gal`
+                  : `${d.key} — no data (the collector was not running)`)}
+                emptyMessage="No daily rollups yet."
+              />
+            </div>
+            <div className="w-legend-note">
+              <span><span className="w-swatch series" />Gallons used</span>
+              <span><span className="w-swatch nodata" />No data (not the same as zero)</span>
+              <span><span className="w-swatch band" />Above 1.5× the average day in this window</span>
+            </div>
+          </>
+        )}
+
+        <SqlPanel blocks={meter ? meter.sql : null} />
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        title="Gallons per hour, last 48 hours"
+        defaultOpen={false}
+        forceOpen={force.open}
+        forceKey={force.key}
+        sub="The overnight window is shaded. A running toilet shows up as a flat, unbroken row of bars across the shaded band — which is exactly what normal use never looks like."
+        actions={
+          <>
+            <Link className="muted small" to="/water/history">Longer view →</Link>
+            <CardTools
+              id="water-hourly-48"
+              title="Water — gallons per hour, last 48 hours"
+              svgRef={hourlyRef}
+              headers={['hour_key', 'hour', 'gallons', 'observed']}
+              rows={(hourly ? hourly.series : []).map((s) => [s.hour_key, s.hour, s.gallons, s.observed ? 'yes' : 'no'])}
+            />
+          </>
+        }
+      >
+        <div ref={hourlyRef}>
+          <BarChart
+            data={bars}
+            height={190}
+            formatTip={(d) => (d.observed
+              ? `${d.label}:00 — ${d.value.toFixed(0)} gal`
+              : `${d.label}:00 — no data (receiver was not listening)`)}
+            emptyMessage="No readings yet. Start the collector: npm run water_collector"
+          />
+        </div>
         <div className="w-legend-note">
           <span><span className="w-swatch series" />Gallons used</span>
           <span><span className="w-swatch nodata" />No data (not the same as zero)</span>
           <span><span className="w-swatch band" />Overnight window</span>
         </div>
-      </div>
+        <SqlPanel blocks={[{
+          label: 'Hourly rollup', table: 'water_hourly', text:
+            'SELECT hour_key, gallons, reading_count\n' +
+            'FROM   water_hourly\n' +
+            'WHERE  meter_id = ' + status.meter_id + '\n' +
+            'ORDER BY hour_key DESC\n' +
+            'LIMIT  48;   -- hour_key is a LOCAL (' + status.tz + ') key, not UTC',
+        }]} />
+      </CollapsibleCard>
 
       {/* Recent alerts, with delivery status. An alert that was raised but never delivered is the
           failure this panel exists to make impossible to miss. */}
-      <div className="w-chart-card">
-        <div className="w-chart-head">
-          <h3 className="w-chart-title">Recent alerts</h3>
-          <Link className="muted small" to="/water/alerts">All alerts →</Link>
-        </div>
+      <CollapsibleCard
+        title="Recent alerts"
+        defaultOpen={false}
+        forceOpen={force.open}
+        forceKey={force.key}
+        actions={
+          <>
+            <Link className="muted small" to="/water/alerts">All alerts →</Link>
+            <CardTools
+              id="water-alerts"
+              title="Water — recent alerts"
+              image={false}
+              headers={['fired_at_local', 'kind', 'severity', 'delivered', 'message']}
+              rows={(alerts || []).map((a) => [a.fired_at_local, a.kind, a.severity, a.delivered ? 'yes' : 'no', a.message])}
+            />
+          </>
+        }
+      >
         {!alerts ? <p className="muted">Loading…</p> : !alerts.length ? (
           <p className="muted">
             Nothing yet — the quiet outcome. Send a test from <b>Settings</b> so you know the
@@ -293,7 +462,14 @@ export default function Monitor() {
             </tbody>
           </table>
         )}
-      </div>
+        <SqlPanel blocks={[{
+          label: 'Alert history (also the cooldown ledger)', table: 'water_alerts', text:
+            'SELECT fired_at_mtn, kind, severity, delivered, message\n' +
+            'FROM   water_alerts\n' +
+            'ORDER BY fired_at_utc DESC\n' +
+            'LIMIT  50;',
+        }]} />
+      </CollapsibleCard>
     </div>
   );
 }
@@ -321,10 +497,22 @@ function fullStamp(iso, tz) {
   try {
     const date = new Intl.DateTimeFormat('en-US', { ...opts, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(d);
     const time = new Intl.DateTimeFormat('en-US', { ...opts, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }).format(d);
-    return date + ' \u00b7 ' + time;
+    return date + ' · ' + time;
   } catch (e) {
     return d.toISOString();          // an unknown tz must not blank the whole header
   }
+}
+
+// The pulsing chip next to the range chips: just the clock, because it sits inches from the full
+// stamp in the banner and repeating the date there would be noise.
+function clockOnly(iso, tz) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz || undefined, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).format(d);
+  } catch (e) { return '—'; }
 }
 
 function ago(min) {

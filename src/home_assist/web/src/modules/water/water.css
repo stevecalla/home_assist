@@ -382,3 +382,141 @@
 }
 .w-rx-stats b { font-variant-numeric: tabular-nums; }
 .w-rx-stats .bad b { color: var(--w-critical); }
+
+/* ── page head: title left, expand/collapse all right ──────────────────────── */
+.w-page-head { display: flex; align-items: flex-start; gap: 14px; }
+.w-page-head > div:first-child { min-width: 0; }
+.w-expand-all { margin-left: auto; display: flex; gap: 6px; flex: none; padding-top: 4px; }
+.w-expand-all button {
+  font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); color: var(--muted);
+}
+.w-expand-all button:hover { color: var(--ink); border-color: var(--w-axis); }
+
+/* ── the Heartbeat / Long view toggle ───────────────────────────────────────
+   A segmented control rather than two chips: the two modes are exclusive views of one meter, and
+   a segment makes that exclusivity visible without a label saying so. */
+.w-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.w-seg button {
+  font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px;
+  border: 0; background: var(--panel); color: var(--muted); cursor: pointer;
+}
+.w-seg button + button { border-left: 1px solid var(--line); }
+.w-seg button.on { background: var(--w-series); color: #fff; }
+
+/* ── range chips + free-entry box ───────────────────────────────────────────
+   Chips are the four ranges anyone actually wants; the box is for the fifth. Committing on blur or
+   Enter (not on every keystroke) is deliberate — typing "36" would otherwise fire a query for 3
+   hours first. */
+.w-rangebar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 10px;
+}
+.w-range-label { font-size: 10.5px; letter-spacing: .05em; color: var(--w-axis); text-transform: uppercase; }
+.w-range-note { font-size: 11px; color: var(--w-axis); }
+.w-chip {
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 3px 10px;
+  border-radius: 999px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--muted); cursor: pointer;
+}
+.w-chip.on { background: var(--w-series); border-color: var(--w-series); color: #fff; }
+.w-numin {
+  font: inherit; font-size: 11.5px; width: 52px; text-align: right;
+  padding: 3px 6px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); color: var(--ink);
+}
+
+/* The live clock chip. It pulses only while the receiver is being heard from, so a frozen chip is
+   itself a signal — the same reason the chart has a pulse trace at all. */
+.w-livetip {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--w-good); border: 1px solid var(--w-good);
+  background: transparent; border-radius: 999px; padding: 2px 10px;
+}
+.w-livetip i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: block; }
+.w-livetip i { animation: w-pulse 2.4s ease-in-out infinite; }
+.w-livetip.flowing { color: var(--w-series); border-color: var(--w-series); }
+@keyframes w-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .w-livetip i { animation: none; } }
+
+/* ── the big readout above the chart ────────────────────────────────────────
+   The number you would read off the dial in the pit, first and largest, because a chart is an
+   argument and the odometer is the fact. */
+.w-readout { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 26px; margin: 0 0 8px; }
+.w-readout-big {
+  font-size: 27px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+.w-readout-big span { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.w-readout-sm { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.w-readout-lab {
+  font-size: 10px; color: var(--w-axis); text-transform: uppercase; letter-spacing: .05em;
+}
+
+.w-swatch.good     { background: var(--w-good); }
+.w-swatch.critical { background: var(--w-critical); }
+
+/* ── hover tooltip on the heartbeat chart ───────────────────────────────── */
+.w-tip {
+  pointer-events: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+  padding: 4px 9px; font-size: 12px; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+}
+
+/* ── export toolbar (usat_apps ChartCard) ───────────────────────────────── */
+.w-tools { display: inline-flex; gap: 6px; margin-left: 8px; }
+.w-tools button {
+  font: inherit; font-size: 11.5px; padding: 2px 9px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); color: var(--muted);
+}
+.w-tools button:hover { color: var(--ink); border-color: var(--w-series); }
+
+.w-modal {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, .55);
+  display: grid; place-items: center; padding: 24px;
+}
+.w-modal-inner {
+  background: var(--panel); border-radius: var(--radius);
+  max-width: 96vw; max-height: 92vh; overflow: auto; padding: 12px;
+}
+.w-modal-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.w-modal-bar strong { margin-right: auto; }
+.w-modal-bar button {
+  font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted);
+}
+.w-modal-inner img { display: block; max-width: 100%; height: auto; }
+
+/* ── "Data source & SQL" ────────────────────────────────────────────────────
+   Closed by default: reference material, not something to read every visit. The text is generated
+   from the same parameters the query ran with, so it can be pasted into Workbench as-is. */
+.w-sql { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.w-sql > summary {
+  cursor: pointer; padding: 6px 11px; font-size: 11.5px; font-weight: 600;
+  color: var(--w-series); list-style: none;
+}
+.w-sql > summary::-webkit-details-marker { display: none; }
+.w-sql > summary::before { content: "\25B8  "; color: var(--w-axis); }
+.w-sql[open] > summary::before { content: "\25BE  "; }
+.w-sql-body { padding: 0 11px 10px; }
+.w-sql-block + .w-sql-block { margin-top: 12px; }
+.w-sql-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.w-sql-label { font-size: 11.5px; font-weight: 700; }
+.w-sql-table {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--w-grid); color: var(--muted);
+}
+.w-sql-copy {
+  margin-left: auto; font: inherit; font-size: 11px; padding: 1px 8px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted);
+}
+.w-sql pre {
+  margin: 0; padding: 8px 10px; overflow-x: auto;
+  font-size: 11.5px; line-height: 1.5;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+}
