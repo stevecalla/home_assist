@@ -52,6 +52,14 @@ export default function Monitor() {
   const [alerts, setAlerts] = useState(null);
   const [meter, setMeter] = useState(null);
   const [tail, setTail] = useState([]);
+  // A 1-second tick, used only to age the "last packet" counter. The data poll stays at 5s — this
+  // is about the DISPLAY being visibly alive, not about asking the server more often.
+  const [tick, setTick] = useState(() => Date.now());
+  // `beat` changes whenever a NEW packet lands. It is used as a React key on the counter, which
+  // remounts the element and therefore replays its animation. A class toggle would need a timer to
+  // remove it, and would silently fail to re-fire when two packets land inside the animation.
+  const [beat, setBeat] = useState(0);
+  const lastHeardRef = useRef(null);
   const [err, setErr] = useState('');
 
   // Meter-card controls
@@ -63,6 +71,11 @@ export default function Monitor() {
 
   // Expand all / Collapse all. `forceKey` is what makes a repeated command work — see
   // CollapsibleCard for why a bare boolean is not enough.
+  // ⇄ Table: the numbers behind the picture, on screen, without downloading anything. A chart you
+  // cannot read the values off is a chart you have to take on faith.
+  const [flipMeter, setFlipMeter] = useState(false);
+  const [flipHourly, setFlipHourly] = useState(false);
+
   const [force, setForce] = useState({ open: undefined, key: 0 });
   const forceAll = (open) => setForce((f) => ({ open, key: f.key + 1 }));
 
@@ -86,6 +99,10 @@ export default function Monitor() {
       setErr('');
       const odo = s.body.meter && s.body.meter.odometer_gallons;
       const readAt = s.body.receiver && s.body.receiver.last_read_at;
+      if (readAt && lastHeardRef.current !== readAt) {
+        lastHeardRef.current = readAt;
+        setBeat((n) => n + 1);
+      }
       if (typeof odo === 'number' && Number.isFinite(odo) && readAt) {
         const t = new Date(readAt).getTime();
         if (Number.isFinite(t)) {
@@ -123,6 +140,11 @@ export default function Monitor() {
   }, [loadStatus, loadSlow]);
 
   useEffect(() => {
+    const id = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
     loadSeries();
     const id = setInterval(loadSeries, SERIES_MS);
     return () => clearInterval(id);
@@ -154,6 +176,12 @@ export default function Monitor() {
   const windowEnd = tailLast !== null && pts.length ? Math.max(tailLast, pts[pts.length - 1].odometer)
     : pts.length ? pts[pts.length - 1].odometer : null;
   const usedInWindow = pts.length && windowEnd !== null ? Math.max(0, windowEnd - pts[0].odometer) : 0;
+  // Seconds since the meter was last heard, recomputed on the 1s tick rather than the 5s poll so
+  // the number moves every second even between fetches.
+  const lastHeardMs = r.last_read_at ? new Date(r.last_read_at).getTime() : null;
+  const secsSince = lastHeardMs === null || Number.isNaN(lastHeardMs)
+    ? null : Math.max(0, Math.round((tick - lastHeardMs) / 1000));
+
   const recentPulse = pts.slice(-10);
   const pulseAvg = recentPulse.length
     ? recentPulse.reduce((a, p) => a + (p.packets || 0), 0) / recentPulse.length : 0;
@@ -180,6 +208,19 @@ export default function Monitor() {
         <div>
           <h2>Water monitor</h2>
           <p className="muted">{status.meter_name ? status.meter_name + ' · ' : ''}ID {status.meter_id} · {status.tz}</p>
+          {/* What is actually on the air, read from the collector's own resolved rtl_433 arguments.
+              "No readings" has two very different causes and one of them is being tuned to the
+              wrong frequency or running a build without the Orion decoder — so the transmitter and
+              the decoder belong on the page, not only in .env. */}
+          {status.radio ? (
+            <p className="muted small w-radio-line">
+              <span className="w-radio-model">{status.radio.model}</span>
+              {status.radio.decoder ? <> · {status.radio.decoder}</> : null}
+              {status.radio.frequency_mhz ? <> · {status.radio.frequency_mhz} MHz</> : null}
+              {status.radio.sample_rate_khz ? <> · {status.radio.sample_rate_khz} ksps</> : null}
+              {r.mode ? <> · {r.mode} mode</> : null}
+            </p>
+          ) : null}
         </div>
         <div className="w-expand-all">
           <button type="button" onClick={() => forceAll(true)}>Expand all</button>
@@ -260,6 +301,8 @@ export default function Monitor() {
               svgRef={mode === 'long' ? longRef : hbRef}
               headers={mode === 'long' ? lvHeaders : hbHeaders}
               rows={mode === 'long' ? lvRows : hbRows}
+              flip={flipMeter}
+              onFlip={setFlipMeter}
             />
           </>
         }
@@ -292,7 +335,12 @@ export default function Monitor() {
           {mode === 'heartbeat' ? (
             <span className="w-range-note">max {(hb && hb.max_hours) || 72}h — per-minute rows stop being readable past that</span>
           ) : null}
-          <span className={'w-livetip ' + (run.flowing ? 'flowing' : 'idle')}>
+          {/* The clock chip. Keyed on `beat`, so the element REMOUNTS each time a new packet lands
+              and its arrival animation replays — the clock does not merely change, it visibly
+              ticks. A constant idle pulse would be decoration; a pulse tied to an actual arrival
+              is information, and its absence is information too. */}
+          <span key={beat} className={'w-livetip ' + (run.flowing ? 'flowing' : 'idle') +
+            (secsSince !== null && secsSince > 120 ? ' stalled' : '')}>
             <i aria-hidden="true" />
             {r.last_read_at ? clockOnly(r.last_read_at, status.tz) : 'no packet yet'}
           </span>
@@ -327,6 +375,17 @@ export default function Monitor() {
           </div>
           {mode === 'heartbeat' ? (
             <>
+              {/* The proof-of-life counter. It counts up every second and snaps back to 0 each time
+                  a packet lands — roughly every 4 seconds when the radio is healthy. Nothing else
+                  on the page moves at that cadence, so this is the one element that answers "is
+                  this thing actually live, right now" without you having to wait a minute to see
+                  whether the chart moved. Colour follows the number; the number is the message. */}
+              <div>
+                <div key={beat} className={'w-readout-sm w-since ' + sinceClass(secsSince)}>
+                  {secsSince === null ? '—' : secsSince + 's'}
+                </div>
+                <div className="w-readout-lab">since last packet</div>
+              </div>
               <div>
                 <div className="w-readout-sm">{usedInWindow.toFixed(1)} gal</div>
                 <div className="w-readout-lab">used in window</div>
@@ -354,7 +413,15 @@ export default function Monitor() {
           ) : null}
         </div>
 
-        {mode === 'heartbeat' ? (
+        {flipMeter ? (
+          <DataTable
+            headers={mode === 'long' ? lvHeaders : hbHeaders}
+            rows={mode === 'long' ? lvRows : hbRows}
+            note={mode === 'long'
+              ? 'Daily totals, oldest first — the same rows the bars are drawn from.'
+              : 'Newest last, one row per minute. `packets` is what the pulse draws; a 0 is a flatline.'}
+          />
+        ) : mode === 'heartbeat' ? (
           <>
             <div ref={hbRef}>
               <HeartbeatChart
@@ -362,6 +429,7 @@ export default function Monitor() {
                 tail={tail}
                 runs={hb ? hb.runs : []}
                 overnight={hb ? hb.overnight : null}
+                tz={status.tz}
                 height={250}
                 emptyMessage={
                   r.collector_up
@@ -421,10 +489,19 @@ export default function Monitor() {
               svgRef={hourlyRef}
               headers={['hour_key', 'hour', 'gallons', 'observed']}
               rows={(hourly ? hourly.series : []).map((s) => [s.hour_key, s.hour, s.gallons, s.observed ? 'yes' : 'no'])}
+              flip={flipHourly}
+              onFlip={setFlipHourly}
             />
           </>
         }
       >
+        {flipHourly ? (
+          <DataTable
+            headers={['hour_key', 'hour', 'gallons', 'observed']}
+            rows={(hourly ? hourly.series : []).map((s) => [s.hour_key, s.hour, s.gallons.toFixed(1), s.observed ? 'yes' : 'no'])}
+            note="Newest last. `observed` = no means the receiver was not listening — not that usage was zero."
+          />
+        ) : (
         <div ref={hourlyRef}>
           <BarChart
             data={bars}
@@ -435,6 +512,7 @@ export default function Monitor() {
             emptyMessage="No readings yet. Start the collector: npm run water_collector"
           />
         </div>
+        )}
         <div className="w-legend-note">
           <span><span className="w-swatch series" />Gallons used</span>
           <span><span className="w-swatch nodata" />No data (not the same as zero)</span>
@@ -504,6 +582,33 @@ export default function Monitor() {
   );
 }
 
+// The rows behind a chart. Scrollable and newest-last, so the bottom of the box is "now" — the same
+// direction the chart reads, which is what makes the two comparable at a glance.
+function DataTable({ headers, rows, note }) {
+  const body = (rows || []).slice(-500);
+  return (
+    <div className="w-datatable">
+      {note ? <p className="w-chart-sub small">{note}</p> : null}
+      <div className="w-datatable-scroll">
+        <table className="w-table">
+          <thead><tr>{headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>
+            {body.map((r, i) => (
+              <tr key={i}>{r.map((c, j) => (
+                <td key={j}>{c === null || c === undefined || c === '' ? <span className="muted">—</span> : String(c)}</td>
+              ))}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">
+        Showing the last {body.length.toLocaleString()} of {(rows || []).length.toLocaleString()} rows.
+        Use <b>⬇ CSV</b> for all of them.
+      </p>
+    </div>
+  );
+}
+
 function Tile({ label, value, note, alarm }) {
   return (
     <div className="w-tile">
@@ -543,6 +648,15 @@ function clockOnly(iso, tz) {
       timeZone: tz || undefined, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
     }).format(d);
   } catch (e) { return '—'; }
+}
+
+// The meter transmits about every 4 seconds. Under ~20s is normal jitter; a minute of silence is
+// worth noticing; past two minutes something is wrong and the watchdog will eventually agree.
+function sinceClass(secs) {
+  if (secs === null) return 'unknown';
+  if (secs <= 20) return 'good';
+  if (secs <= 120) return 'warn';
+  return 'bad';
 }
 
 function ago(min) {

@@ -33,6 +33,18 @@ function fmtTick(ms, spanMs) {
   return hh + ':' + mm;
 }
 
+// Wall clock in the METER's timezone. The tooltip has to agree with the "Last packet" stamp in the
+// banner, and that one is explicitly house time — a laptop opened from another state must not show
+// two different clocks for the same instant.
+function fmtClock(ms, tz, seconds) {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz || undefined, hour: '2-digit', minute: '2-digit',
+      ...(seconds ? { second: '2-digit' } : {}), hour12: false,
+    }).format(new Date(ms));
+  } catch (e) { return ''; }
+}
+
 const LEVEL_COLOR = { running: 'var(--w-series)', long: 'var(--w-serious)', continuous: 'var(--w-critical)' };
 
 /**
@@ -58,6 +70,7 @@ export default function HeartbeatChart({
   tail = [],          // [{ t, gallons }]  the LIVE tail, straight off the 5s status poll
   runs = [],          // [{ start, end, minutes, level }]
   overnight,          // [startHour, endHour] or null
+  tz,                 // the METER's timezone, so the tooltip clock matches the banner
   height = 250,
   emptyMessage = 'Waiting for the first reading…',
 }) {
@@ -198,17 +211,24 @@ export default function HeartbeatChart({
   const STEPS = [5 * 60e3, 15 * 60e3, 30 * 60e3, 3600e3, 3 * 3600e3, 6 * 3600e3, 12 * 3600e3, 24 * 3600e3];
   const step = STEPS.find((sM) => span / sM <= maxTicks) || STEPS[STEPS.length - 1];
 
+  // Everything hoverable, in one list. The live tail is included so you can rest the cursor on the
+  // right-hand edge and read the packets as they land.
+  const hoverPts = cols
+    .map((c) => ({ t: c.t, odo: c.odo, packets: c.packets, live: false }))
+    .concat(tailPts.map((p) => ({ t: p.t, odo: p.gallons, packets: null, live: true })));
+
+  // Hover stores a TIMESTAMP, not the row under the cursor. Storing the row froze the tooltip at
+  // the values it had when the mouse stopped moving — so resting on the live edge showed a number
+  // that quietly went stale while new packets arrived behind it. Resolving the nearest point at
+  // render time means the tooltip refreshes itself on every poll, which is the whole point of
+  // hovering the live end.
+  const hoverPt = hover === null ? null : hoverPts.reduce(
+    (best, p) => (best === null || Math.abs(p.t - hover) < Math.abs(best.t - hover) ? p : best), null
+  );
+
   function onMove(e) {
     const box = e.currentTarget.getBoundingClientRect();
-    const tAt = t0 + ((e.clientX - box.left - padL) / plotW) * span;
-    let best = null, bestD = Infinity;
-    for (const c of cols) {
-      const dist = Math.abs(c.t - tAt);
-      // Report the BUCKET's packet count, not the raw minute under the cursor: the tooltip has to
-      // agree with the mark it is pointing at, and the mark is the bucket's worst minute.
-      if (dist < bestD) { bestD = dist; best = { ...c.src, packets: c.packets }; }
-    }
-    if (best) setHover(best);
+    setHover(t0 + ((e.clientX - box.left - padL) / plotW) * span);
   }
 
   return (
@@ -303,6 +323,42 @@ export default function HeartbeatChart({
             : <rect key={'p' + i} x={px - Math.max(1.5, colW / 2)} width={Math.max(3, colW)}
                     y={pulseTop} height={7} fill="var(--w-critical)" />;
         })}
+        {/* Where the stored rollup ends and the live tail begins. Without this the two are one
+            continuous trace and it is not obvious which part of the chart is moving — the question
+            "is this updating?" has to be answerable by looking, not by waiting a minute. */}
+        {tailPts.length && cols.length ? (
+          <g>
+            <line x1={x(lastMinuteT)} x2={x(lastMinuteT)} y1={padT} y2={pulseTop + 4}
+                  stroke="var(--w-good)" strokeWidth="1" strokeDasharray="2 3" opacity="0.55" />
+            <text x={Math.min(x(lastMinuteT) + 5, W - padR - 26)} y={padT + 9}
+                  fontSize="9" fontWeight="700" fill="var(--w-good)" opacity="0.85">LIVE</text>
+          </g>
+        ) : null}
+
+        {/* The LIVE end of the pulse: one tick per packet actually observed by this page, not a
+            per-minute count. This is the part that moves while you are looking at it — a new tick
+            appears every few seconds when the radio is healthy. The stored minutes to its left are
+            a summary; this is the raw thing happening now. */}
+        {tailPts.map((p, i) => {
+          const newest = i === tailPts.length - 1;
+          return (
+            <line key={'lt' + p.t} x1={x(p.t)} x2={x(p.t)} y1={pulseTop} y2={pulseTop - pulseH}
+                  stroke="var(--w-good)" strokeWidth={newest ? 2 : 1.4}>
+              {/* Keyed on the timestamp, so React mounts a NEW element for each arrival and the
+                  animation actually replays. Keyed on the index it would reuse the node and the
+                  tick would simply appear, which is exactly the "did anything happen?" problem. */}
+              {newest ? <animate attributeName="y2" from={pulseTop} to={pulseTop - pulseH} dur="0.35s" /> : null}
+              {newest ? <animate attributeName="stroke-width" values="3.5;2" dur="0.6s" /> : null}
+            </line>
+          );
+        })}
+        {tailPts.length ? (
+          <circle cx={x(tailPts[tailPts.length - 1].t)} cy={pulseTop - pulseH / 2} r="3"
+                  fill="var(--w-good)">
+            <animate attributeName="opacity" values="1;0.15;1" dur="1.6s" repeatCount="indefinite" />
+          </circle>
+        ) : null}
+
         <line x1={padL} x2={W - padR} y1={pulseTop} y2={pulseTop} stroke="var(--w-grid)" strokeWidth="0.6" />
 
         {(() => {
@@ -322,19 +378,25 @@ export default function HeartbeatChart({
           return out;
         })()}
 
-        {hover ? (
-          <line x1={x(new Date(hover.minute_utc).getTime())} x2={x(new Date(hover.minute_utc).getTime())}
+        {hoverPt ? (
+          <line x1={x(hoverPt.t)} x2={x(hoverPt.t)}
                 y1={padT} y2={pulseTop} stroke="var(--w-axis)" strokeWidth="1" strokeDasharray="3 3" />
         ) : null}
+        {hoverPt ? <circle cx={x(hoverPt.t)} cy={y(hoverPt.odo - base)} r="3.5" fill="var(--w-series)" /> : null}
       </svg>
 
-      {hover ? (
-        <div className="w-tip" style={{
+      {hoverPt ? (
+        <div className={'w-tip' + (hoverPt.live ? ' is-live' : '')} style={{
           position: 'absolute', top: 0,
-          left: Math.min(Math.max(x(new Date(hover.minute_utc).getTime()) - 90, 0), Math.max(0, W - 200)),
+          left: Math.min(Math.max(x(hoverPt.t) - 90, 0), Math.max(0, W - 220)),
         }}>
-          {String(hover.minute_mtn || '').slice(11, 16)} · {Math.round(hover.odometer).toLocaleString()} gal ·{' '}
-          {hover.packets > 0 ? hover.packets + ' packets' : <span style={{ color: 'var(--w-critical)' }}>no packets</span>}
+          <b>{fmtClock(hoverPt.t, tz, hoverPt.live)}</b>{' · '}
+          {hoverPt.odo.toLocaleString(undefined, { maximumFractionDigits: 2 })} gal{' · '}
+          {hoverPt.live
+            ? <span className="w-tip-live">live packet</span>
+            : hoverPt.packets > 0
+              ? hoverPt.packets + ' packets/min'
+              : <span style={{ color: 'var(--w-critical)' }}>no packets</span>}
         </div>
       ) : null}
     </div>

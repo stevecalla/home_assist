@@ -14,6 +14,7 @@ const readings = require('./store/readings');
 const alerts = require('./store/alerts');
 const rules = require('./rules/leak_rules');
 const mailer = require('../../notify/mailer');
+const rtl433 = require('./collector/rtl433');
 
 // One place to turn an exception into a clean 500 instead of an unhandled rejection.
 function guard(fn) {
@@ -74,6 +75,11 @@ function mount(app) {
       tz: tz,
       meter_id: meter_id,
       meter_name: cfg.meter_name || null,
+      // What is actually on the air. Read from the SAME resolved rtl_433 arguments the collector
+      // launches with, not retyped here — if someone retunes the radio in .env, this line follows.
+      // Worth showing because "no readings" has two very different causes, and one of them is
+      // being tuned to the wrong frequency or running a build without the Orion decoder.
+      radio: radio_info(),
       leak: leak,
       // The measurement the app exists for: is water running RIGHT NOW, and for how long without
       // stopping. The hourly rules need 6 hours to speak; this answers in minutes.
@@ -371,6 +377,29 @@ function long_sql(meter_id, days) {
       'SELECT last_gallons, last_read_at_utc\n' +
       'FROM   water_collector_state WHERE meter_id = ' + meter_id + ';' },
   ];
+}
+
+/**
+ * The transmitter, described from the running configuration.
+ *
+ * Protocol 223 is "Badger ORION water meter, 100kbps" in rtl_433's table. The classic Orion endpoint
+ * is a fixed-frequency ISM transmitter, which is why the frequency is a constant in the args rather
+ * than something the receiver hunts for.
+ */
+function radio_info() {
+  let args = '';
+  try { args = rtl433.resolve_args() || ''; } catch (e) { args = ''; }
+  const freq = /-f\s+([0-9.]+)\s*M/i.exec(args);
+  const proto = /-R\s+(\d+)/.exec(args);
+  const rate = /-s\s+([0-9.]+)\s*k/i.exec(args);
+  return {
+    model: 'Badger ORION water meter',
+    decoder: proto ? 'rtl_433 protocol ' + proto[1] : 'rtl_433 (protocol not pinned)',
+    protocol: proto ? Number(proto[1]) : null,
+    frequency_mhz: freq ? Number(freq[1]) : null,
+    sample_rate_khz: rate ? Number(rate[1]) : null,
+    args: args || null,
+  };
 }
 
 module.exports = { mount };
