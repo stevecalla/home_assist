@@ -563,6 +563,7 @@ export default function Monitor() {
                 rows={rtGrid}
                 initialSort={null}
                 live
+                rowNumbers
                 liveLabel="new transmissions"
                 filterPlaceholder="Filter — try a meter id, CRC, or a volume"
                 renderCell={renderPacketCell(rt && rt.quality, status.meter_id)}

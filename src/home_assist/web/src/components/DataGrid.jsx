@@ -57,6 +57,7 @@ export default function DataGrid({
   maxHeight = 380,
   live = false,         // newest-first and arriving continuously
   liveLabel = 'new',
+  rowNumbers = false,   // a leading position column
 }) {
   const [sort, setSort] = useState(initialSort || null);
   const [q, setQ] = useState('');
@@ -184,6 +185,17 @@ export default function DataGrid({
         <table className="w-grid-table">
           <thead>
             <tr>
+              {/* Position, not identity. Deliberately NOT sortable — it IS the sort order, so
+                  clicking it could only ever reorder by the thing it is describing. It is also
+                  excluded from the filter, or typing "1" would match nearly every row. */}
+              {rowNumbers ? (
+                <th className="w-grid-num">
+                  <span className="w-grid-th as-static"
+                        title="Position in the list as displayed. With newest first it shifts down as transmissions arrive — it numbers the view, not the row.">
+                    #
+                  </span>
+                </th>
+              ) : null}
               {columns.map((c) => {
                 const active = sort && sort.key === c.key;
                 return (
@@ -208,11 +220,12 @@ export default function DataGrid({
           </thead>
           <tbody>
             {!sorted.length ? (
-              <tr><td colSpan={columns.length} className="w-grid-empty">{q ? 'Nothing matches "' + q + '".' : emptyMessage}</td></tr>
+              <tr><td colSpan={columns.length + (rowNumbers ? 1 : 0)} className="w-grid-empty">{q ? 'Nothing matches "' + q + '".' : emptyMessage}</td></tr>
             ) : sorted.map((r, i) => (
               <tr key={r._key || i}
                   className={(r._highlight ? 'is-mine' : (r._dim ? 'is-other' : '')) +
                     (flash.has(r._key || i) ? ' is-new' : '')}>
+                {rowNumbers ? <td className="w-grid-num">{i + 1}</td> : null}
                 {columns.map((c) => (
                   <td key={c.key} className={'align-' + (c.align || 'center')}>
                     {renderCell ? renderCell(c, r[c.key], r) : fallback(r[c.key])}

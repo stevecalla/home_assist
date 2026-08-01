@@ -695,3 +695,13 @@
 @media (prefers-reduced-motion: reduce) {
   .w-grid-live i, .w-grid-table tbody tr.is-new td { animation: none; }
 }
+
+/* The position column. Recessive on purpose — it is scaffolding for talking about a row
+   ("the -19 dB one, row 14"), not data, so it must never compete with the values beside it. */
+.w-grid-num {
+  width: 44px; text-align: center; color: var(--w-axis);
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+th.w-grid-num { padding: 6px 8px; }
+.w-grid-th.as-static { cursor: help; }
+.w-grid-table tbody tr:hover td.w-grid-num { color: var(--ink); }
