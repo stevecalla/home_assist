@@ -234,6 +234,63 @@ test('the grid caps what it paints and says what it left out', function () {
   assert.match(grid, /windowNote/, 'a truncated grid must explain itself');
 });
 
+test('a boolean setting can actually be turned OFF', function () {
+  // The bug: `coerce` had branches for int and float and nothing for bool, so a bool fell through
+  // to String(raw) — and "0" is a TRUTHY string in JavaScript. Every switch read as ON no matter
+  // what was saved, so there was no way to stop packet capture from the Settings page at all. It
+  // surfaced because someone typed 3 into what looked like a number box and it still worked.
+  const settings = require('../store/settings');
+  assert.strictEqual(settings.coerce('bool', '0', 1), 0, '"0" must be OFF, not a truthy string');
+  assert.strictEqual(settings.coerce('bool', 0, 1), 0);
+  assert.strictEqual(settings.coerce('bool', '1', 0), 1);
+  assert.strictEqual(settings.coerce('bool', 'false', 1), 0);
+  assert.strictEqual(settings.coerce('bool', 'off', 1), 0);
+  assert.strictEqual(settings.coerce('bool', '3', 0), 1, 'any non-zero number is on');
+  assert.strictEqual(settings.coerce('bool', '', 1), 1, 'blank falls back to the default');
+
+  // And the form must offer a switch, not a free-text number box — typing 3 into an on/off is not
+  // a user error, it is the control never having said what it wanted.
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Settings.jsx'), 'utf8');
+  assert.match(ui, /f\.type === 'bool'/, 'the Settings form must special-case bool');
+  assert.match(ui, /role="switch"/, 'a bool needs a switch');
+});
+
+test('the decode rate is measured over the span recorded, not the span requested', function () {
+  // Enable packet recording, open the 24h view three hours later, and the old code reported 13.9%
+  // decoded — which reads as "the radio is missing six packets in seven". The real answer was "we
+  // have been recording for three of these twenty-four hours". Same number, opposite conclusions,
+  // and the alarming one was on screen. Coverage and reception are different facts.
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const block = api.slice(api.indexOf("app.get('/api/water/packets'"), api.indexOf('// ── reception:'));
+  assert.match(block, /coverage\.seconds/, 'decode must divide by the COVERED span');
+  assert.ok(block.indexOf('decode_rate({ length: counts.ours }, interval, hours * 3600)') === -1,
+    'dividing by the requested window is the bug');
+  assert.match(block, /partial: covered < window_seconds/, 'the response must flag a partial window');
+  assert.match(block, /first_mtn/, 'and say when recording actually started');
+});
+
+test('every metric on the Monitor card carries a definition', function () {
+  // The table headers had tooltips and the readout numbers above them did not, which is what left
+  // "13.9%" unexplained on screen. Each entry also names the SETTING behind it where one exists,
+  // so "where do I change this" is answerable from the number rather than by hunting Settings.
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
+  const block = ui.slice(ui.indexOf('const METRIC_HELP'), ui.indexOf('function fmtDur'));
+  ['reading', 'since', 'shown', 'interval', 'decoded', 'snr', 'gaps',
+    'today', 'overnight', 'last24', 'avg', 'run'].forEach(function (k) {
+    assert.ok(block.indexOf(k + ':') !== -1, 'METRIC_HELP needs an entry for ' + k);
+  });
+  const helps = block.match(/: '[^']{40,}'/g) || [];
+  assert.ok(helps.length >= 12, 'every metric needs a real sentence, not a restated label');
+  // The two that are meaningless without a scale must name actual numbers.
+  assert.match(block.slice(block.indexOf('snr:')), /18 dB/);
+  assert.match(block.slice(block.indexOf('decoded:')), /95%/);
+  // And the retention chip must name the setting it maps to.
+  assert.match(ui, /packets_retention_days — Settings/,
+    'the "keeping N days" chip must say which setting changes it');
+});
+
 test('the collector prunes water_packets in the retention sweep', function () {
   // This table writes a row per transmission — ~21,600 a day. It is bounded by the clock, and only
   // if something actually runs the clock.

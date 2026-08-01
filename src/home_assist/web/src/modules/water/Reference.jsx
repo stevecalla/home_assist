@@ -196,6 +196,125 @@ export default function Reference() {
         </table>
       </CollapsibleCard>
 
+      {/* ── the Real time tab ────────────────────────────────────────────────────── */}
+      <CollapsibleCard
+        title="Reading the Real time tab"
+        defaultOpen={false}
+        forceOpen={force.open}
+        forceKey={force.key}
+        actions={<Link className="muted small" to="/water/monitor">Open the Monitor →</Link>}
+      >
+        <p className="w-chart-sub">
+          Three tabs on the meter card, each one rung coarser and one rung longer than the last.
+          Nothing overlaps, and no tab is doing another&apos;s job.
+        </p>
+        <table className="w-table">
+          <thead><tr><th>Tab</th><th>Answers</th><th>Source</th><th>Resolution</th><th>Window</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Real time</strong></td>
+              <td>Is it running <em>this second</em>? Is my antenna healthy?</td>
+              <td><code>water_packets</code></td>
+              <td>every packet (~4 s)</td>
+              <td>15 m – 24 h</td>
+            </tr>
+            <tr>
+              <td><strong>Heartbeat</strong></td>
+              <td>What happened over the last few days? When did the run start?</td>
+              <td><code>water_reception</code></td>
+              <td>1 minute</td>
+              <td>1 – 72 h</td>
+            </tr>
+            <tr>
+              <td><strong>Long view</strong></td>
+              <td>Is usage creeping up month over month?</td>
+              <td><code>water_hourly</code></td>
+              <td>1 day</td>
+              <td>7 – 400 d</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p className="w-chart-sub" style={{ marginTop: 12, fontWeight: 700 }}>Signal strength, in words</p>
+        <p className="w-chart-sub small">
+          <strong>SNR is the one that matters.</strong> It is how far the signal sits above the
+          background noise, and it — not raw power — predicts whether a packet decodes. RSSI is here
+          because read next to <code>noise</code> it separates &ldquo;the meter is far away&rdquo;
+          from &ldquo;the band got noisy&rdquo;.
+        </p>
+        {ref.signal_quality ? (
+          <table className="w-table">
+            <thead><tr><th>Band</th><th>SNR (dB)</th><th>RSSI (dBm)</th><th>What it means</th></tr></thead>
+            <tbody>
+              {ref.signal_quality.snr.bands.map((b, i) => {
+                const r = ref.signal_quality.rssi.bands[i] || {};
+                return (
+                  <tr key={b.level}>
+                    <td><span className={'w-sig ' + b.level}><span className="w-sig-tag">{b.label}</span></span></td>
+                    <td>{b.min === null ? 'below ' + ref.signal_quality.snr.bands[i - 1].min : b.min + ' and up'}</td>
+                    <td>{r.min === null ? 'below ' + (ref.signal_quality.rssi.bands[i - 1] || {}).min : r.min + ' and up'}</td>
+                    <td className="muted small">{b.note}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : null}
+
+        <p className="w-chart-sub" style={{ marginTop: 12, fontWeight: 700 }}>Gaps, and what they tell you</p>
+        <table className="w-table">
+          <thead><tr><th>What you see</th><th>It means</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>A gap at all</strong></td>
+              <td>A silence longer than 3× the measured interval. Normal jitter is not flagged, or the
+                list would be one nobody reads.</td>
+            </tr>
+            <tr>
+              <td><strong>Signal collapsed across it</strong></td>
+              <td>An <em>RF path</em> problem — something moved, something got wet, a door closed.</td>
+            </tr>
+            <tr>
+              <td><strong>Signal held across it</strong></td>
+              <td>Interference, or the receiver stalled. The path was fine; something else was not.</td>
+            </tr>
+            <tr>
+              <td><strong>&ldquo;decoded since 12:31&rdquo;</strong></td>
+              <td>The window reaches back further than the recording does. The percentage is measured
+                over what was actually recorded, not the whole window — otherwise enabling recording
+                an hour ago would report a failing antenna.</td>
+            </tr>
+            <tr>
+              <td><strong>A neighbouring meter</strong></td>
+              <td>Captured for comparison only. It can never advance your odometer, enter a rule, or
+                raise an alert. If an antenna move raises your SNR and not theirs you improved
+                <em> your</em> path; if it raises both, you improved the receiver.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {ref.packet_columns ? (
+          <>
+            <p className="w-chart-sub" style={{ marginTop: 12, fontWeight: 700 }}>Every column in the table</p>
+            <table className="w-table">
+              <thead><tr><th>Column</th><th>Means</th></tr></thead>
+              <tbody>
+                {ref.packet_columns.map((c) => (
+                  <tr key={c.key}>
+                    <td style={{ whiteSpace: 'nowrap' }}><code>{c.key}</code></td>
+                    <td className="small">{c.help}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted small" style={{ marginTop: 6 }}>
+              These are the same definitions the column tooltips show — one source, so they cannot
+              disagree.
+            </p>
+          </>
+        ) : null}
+      </CollapsibleCard>
+
       {/* ── data ─────────────────────────────────────────────────────────────────── */}
       <CollapsibleCard
         title="Data & retention"

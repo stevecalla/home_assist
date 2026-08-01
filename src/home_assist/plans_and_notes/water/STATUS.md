@@ -2,7 +2,7 @@
 
 Snapshot of what's built and what's next. Platform-level status is in `../STATUS.md`.
 
-Last updated: 2026-08-01 (Monitor redesign: the meter card, per-minute heartbeat, collapsible cards and exports).
+Last updated: 2026-08-01 (Real time tab, per-packet capture, sortable grid, metric tooltips).
 
 ## What it is
 
@@ -210,6 +210,42 @@ Two bugs found and fixed while verifying it:
 A third was designed out rather than fixed: the chart downsamples to one column per ~2px, and the
 packet aggregate is **MIN over the bucket**, not average. A one-minute outage inside a four-minute
 bucket still draws a flatline. On a monitor the worst minute is the one worth seeing.
+
+## The Real time tab (2026-08-01)
+
+A third mode on the meter card, backed by a new `water_packets` table: one row per decoded
+transmission, every meter in range, bounded by a short prune rather than by usage.
+
+| piece | what | why |
+|---|---|---|
+| `water_packets` | InnoDB, DATETIME(3), PK (meter_id, heard_at_utc) | sub-second ordering is the point; whole seconds collide at a 4s cadence |
+| Capture scope | every Badger Orion packet, ours and the neighbours | a neighbour at a fixed distance is a free reference signal for antenna work |
+| Counting scope | UNCHANGED -- our meter only | a neighbour must never advance an odometer or raise an alert. A test pins the ordering |
+| Flush | its own 5-second timer | not the 60s tick; a live view fed by a once-a-minute write is not live |
+| Chart | odometer at exact seconds, SNR per packet, one tick per packet, gap bands | an SNR dip before a gap is a path problem; a flat trace across one is not |
+| Grid | sort, filter, freeze, paginate, row numbers, reset, red arrival flash | every column carries a definition served from the API |
+| Signal bands | STRONG / OK / WEAK / POOR from `rules.SIGNAL_QUALITY` | one source for the badge, the scoreboard and the Reference page |
+
+Bugs found on live hardware, each one invisible in replay mode:
+
+1. **`integrity` and `freq_mhz` were always NULL.** The code read `Integrity` -- our own synthetic
+   replay meter's field name. rtl_433 says `mic`. And frequency needs `-M freq` and arrives as
+   `freq1`/`freq2` for an FSK protocol. Both flags are now in DEFAULT_ARGS.
+2. **Packets reached MySQL once a minute.** The buffer flushed inside `tick()`. The browser polled
+   every 4s and correctly showed nothing for 56 of them.
+3. **Row keys included the array index.** One arrival at the top changed every key below it, so
+   React remounted the whole table each poll and new-row detection saw all 200 rows as fresh.
+4. **`type: 'bool'` had no branch in `coerce()`.** A bool fell through to `String(raw)`, and "0" is
+   truthy -- so a switch saved as off read as on, and no boolean setting could be turned off at all.
+   Settings now renders a real switch instead of a number box.
+5. **The decode rate divided by the window, not the coverage.** Enable recording, open the 24h view
+   three hours later, and it reported 13.9% -- which reads as a failing antenna when the real answer
+   was "we have been recording for three of these twenty-four hours". It now measures over the span
+   actually recorded and the label reads `decoded since 15:36` when the window is only partly covered.
+
+Known gap, deliberately not built: `gap_spans` only sees silences BETWEEN two packets, so a
+trailing silence -- the one happening right now -- is not in the gaps list. The `since last packet`
+counter covers that case and turns red, which is the more visible place for it.
 
 ## Open items
 

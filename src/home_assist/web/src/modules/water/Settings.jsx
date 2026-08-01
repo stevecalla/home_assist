@@ -103,15 +103,34 @@ export default function Settings() {
                   {f.label}{changed ? <span className="w-dirty"> •</span> : null}
                   <div className="muted small" style={{ fontWeight: 400 }}><code>{f.name}</code></div>
                 </label>
-                <input
-                  id={'f-' + f.name}
-                  type={f.type === 'string' ? 'text' : 'number'}
-                  step={f.type === 'float' ? 'any' : 1}
-                  min={f.min}
-                  max={f.max}
-                  value={value === null || value === undefined ? '' : value}
-                  onChange={(e) => setDraft((d) => Object.assign({}, d, { [f.name]: e.target.value }))}
-                />
+                {/* A yes/no gets a SWITCH, not a number box. Typing 3 into an on/off setting is
+                    not a user error — it is the control admitting it never said what it wanted.
+                    The value stays 1/0 on the wire; only the affordance changes. */}
+                {f.type === 'bool' ? (
+                  <span className="w-toggle-wrap">
+                    <button
+                      type="button"
+                      id={'f-' + f.name}
+                      role="switch"
+                      aria-checked={Number(value) ? 'true' : 'false'}
+                      className={'w-toggle' + (Number(value) ? ' on' : '')}
+                      onClick={() => setDraft((d) => Object.assign({}, d, { [f.name]: Number(value) ? 0 : 1 }))}
+                    >
+                      <span className="w-toggle-knob" aria-hidden="true" />
+                    </button>
+                    <span className="w-toggle-word">{Number(value) ? 'On' : 'Off'}</span>
+                  </span>
+                ) : (
+                  <input
+                    id={'f-' + f.name}
+                    type={f.type === 'string' ? 'text' : 'number'}
+                    step={f.type === 'float' ? 'any' : 1}
+                    min={f.min}
+                    max={f.max}
+                    value={value === null || value === undefined ? '' : value}
+                    onChange={(e) => setDraft((d) => Object.assign({}, d, { [f.name]: e.target.value }))}
+                  />
+                )}
                 <div className="w-field-help">{f.help}</div>
               </div>
             );

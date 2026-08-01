@@ -790,3 +790,35 @@ th.w-grid-num { padding: 6px 8px; }
 }
 .w-grid-reset:disabled { opacity: .35; cursor: default; }
 .w-grid-reset.is-dirty { color: var(--w-series); border-color: var(--w-series); }
+
+/* ── on/off switch ───────────────────────────────────────────────────────────
+   Paired with the WORD, never the switch alone: position is a weak signal in a
+   long form, and "On"/"Off" survives a screenshot and a colour-blind reader. */
+.w-toggle-wrap { display: inline-flex; align-items: center; gap: 9px; }
+.w-toggle {
+  width: 42px; height: 23px; border-radius: 999px; padding: 0; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); position: relative;
+  transition: background .15s ease, border-color .15s ease;
+}
+.w-toggle-knob {
+  position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%;
+  background: var(--w-axis); transition: transform .15s ease, background .15s ease;
+}
+.w-toggle.on { background: var(--w-good); border-color: var(--w-good); }
+.w-toggle.on .w-toggle-knob { transform: translateX(19px); background: #fff; }
+.w-toggle:focus-visible { outline: 2px solid var(--w-series); outline-offset: 2px; }
+.w-toggle-word { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .w-toggle, .w-toggle-knob { transition: none; } }
+
+/* The "?" that marks a label carrying a definition. A tooltip nobody knows is there is not a
+   tooltip — the marker is the whole point. */
+.w-q {
+  display: inline-block; margin-left: 4px; font-style: normal;
+  font-size: 8.5px; font-weight: 700; width: 12px; height: 12px; line-height: 11px;
+  text-align: center; border-radius: 50%; border: 1px solid var(--line);
+  color: var(--w-axis); cursor: help; vertical-align: 1px;
+}
+.w-readout-lab:hover .w-q, .w-tile-label:hover .w-q, .w-mem span:hover .w-q {
+  color: var(--w-series); border-color: var(--w-series);
+}
+.w-readout-lab[title], .w-tile-label[title], .w-mem span[title] { cursor: help; }

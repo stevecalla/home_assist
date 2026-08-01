@@ -186,6 +186,20 @@ function coerce(type, raw, def) {
   if (raw === undefined || raw === null || raw === '') return def;
   if (type === 'int') { const n = parseInt(raw, 10); return Number.isFinite(n) ? n : def; }
   if (type === 'float') { const n = parseFloat(raw); return Number.isFinite(n) ? n : def; }
+  // BOOL had no branch here, and the consequence was silent and total: a bool fell through to
+  // String(raw), and "0" is a TRUTHY string in JavaScript. So a switch saved as off read as on,
+  // every time, and there was no way to turn one off from the Settings page at all.
+  //
+  // Accepts what a human or a .env might plausibly write, not only 1 and 0, because the failure
+  // mode of the strict version is the same silent one — "false" or "no" would coerce to true.
+  if (type === 'bool') {
+    if (typeof raw === 'boolean') return raw ? 1 : 0;
+    const t = String(raw).trim().toLowerCase();
+    if (t === '1' || t === 'true' || t === 'yes' || t === 'on') return 1;
+    if (t === '0' || t === 'false' || t === 'no' || t === 'off') return 0;
+    const n = Number(t);
+    return Number.isFinite(n) ? (n ? 1 : 0) : (def ? 1 : 0);
+  }
   return String(raw);
 }
 

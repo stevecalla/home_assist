@@ -72,6 +72,31 @@ function band_of(quality, kind, value) {
   return null;
 }
 
+/**
+ * What every number on this card means, and what a good one looks like.
+ *
+ * The table headers have carried definitions since they were built; the readout numbers above them
+ * did not, which is the inconsistency that had someone asking what "13.9%" meant. Each entry names
+ * the SETTING behind it where one exists, so "where do I change this" is answerable from the number
+ * itself rather than by hunting the Settings page.
+ */
+const METRIC_HELP = {
+  reading: 'The lifetime odometer, exactly as the meter transmits it — the same number as the dial in the pit. It only ever goes up, and only in whole gallons.',
+  since: 'Seconds since the last decoded transmission. About 4s is normal; past 60s is worth noticing; past two minutes the receiver-silent watchdog will eventually agree. Setting: stale_minutes (Settings → Alerts).',
+  shown: 'How many transmissions are loaded into THIS view. Not how many are in the window and not how many are stored — the rows chips control this one.',
+  interval: 'The typical gap between transmissions, measured from your own packets rather than assumed. Median, not average, so one dropout cannot drag it up.',
+  decoded: 'Packets heard divided by packets that should have arrived, measured over the span actually recorded — not the whole window. 95%+ is a healthy antenna. Below 80% you are losing packets and the gaps list will say where.',
+  snr: 'Signal-to-noise on the most recent packets — the number that predicts whether a packet decodes at all. Above 18 dB is comfortable, 10-18 dB works but drops packets, below 10 dB is where gaps begin. Move the antenna to raise this.',
+  gaps: 'Silences longer than three times the measured interval. Zero is what you want. Each one is listed below with the signal either side, which is what separates an RF path problem from interference.',
+  used_window: 'Gallons the odometer advanced across this window. Zero is the normal overnight answer.',
+  pulse: 'Average packets per minute over the last ten minutes of the stored rollup. Around 14 is healthy for a meter transmitting every 4 seconds.',
+  today: 'Gallons since local midnight, from the hourly rollup.',
+  overnight: 'Gallons used inside the overnight window. This is the one that catches a running toilet, because nothing legitimate should run at 3am. Settings: overnight_start_hour, overnight_end_hour, overnight_threshold_gal.',
+  last24: 'A rolling 24 hours, not "today" — it includes last night.',
+  avg: 'Mean of the previous 7 COMPLETE days. Today is excluded because a partial day would drag it down all morning.',
+  run: 'How long water has been moving without a break. Duration, not volume, is the measurement — every fixture in a house stops on its own, so something that never stops is the thing worth waking you. Settings: run_warn_min, run_alarm_min.',
+};
+
 function fmtDur(min) {
   const m = Math.max(0, Math.round(min));
   if (m < 60) return m + ' min';
@@ -285,6 +310,7 @@ export default function Monitor() {
   // antenna; the only thing failing was a LIMIT clause.
   const rtDecodePct = rt && rt.decode ? Math.min(100, rt.decode.pct) : null;
   const rtCounts = rt && rt.counts ? rt.counts : null;
+  const rtCoverage = rt && rt.coverage ? rt.coverage : null;
   const rtLastSnr = (() => {
     const withSnr = rtMine.filter((p) => p.snr !== null && p.snr !== undefined).slice(-20);
     return withSnr.length ? withSnr.reduce((a, p) => a + p.snr, 0) / withSnr.length : null;
@@ -363,15 +389,16 @@ export default function Monitor() {
       </div>
 
       <div className="w-tiles">
-        <Tile label="Today" value={t.today} note={'since midnight ' + status.tz.split('/')[1].replace('_', ' ')} />
+        <Tile label="Today" value={t.today} help={METRIC_HELP.today} note={'since midnight ' + status.tz.split('/')[1].replace('_', ' ')} />
         <Tile
           label={`Overnight (${t.overnight_window[0]}–${t.overnight_window[1]})`}
           value={t.overnight}
+          help={METRIC_HELP.overnight}
           note={overnightHigh ? `over the ${t.overnight_threshold} gal threshold` : `threshold ${t.overnight_threshold} gal`}
           alarm={overnightHigh}
         />
-        <Tile label="Last 24 hours" value={t.last_24h} />
-        <Tile label="Daily average" value={t.avg_day_7d} note="previous 7 full days" />
+        <Tile label="Last 24 hours" value={t.last_24h} help={METRIC_HELP.last24} />
+        <Tile label="Daily average" value={t.avg_day_7d} help={METRIC_HELP.avg} note="previous 7 full days" />
       </div>
 
       {/* ── the meter ─────────────────────────────────────────────────────────────────────────
@@ -432,11 +459,21 @@ export default function Monitor() {
                 <button type="button" className={rtScope === 'mine' ? 'on' : ''} onClick={() => setRtScope('mine')}>This meter</button>
                 <button type="button" className={rtScope === 'all' ? 'on' : ''} onClick={() => setRtScope('all')}>All meters</button>
               </span>
+              {/* Two different facts, so two tooltips. "Keeping" is a disk retention setting;
+                  "in this window" is how many rows this view loaded. They sat next to each other
+                  with no way to tell which was which, and neither said where to go to change it. */}
               {rt ? (
                 <span className="w-mem">
-                  keeping <b>{rt.retention_days} day{rt.retention_days === 1 ? '' : 's'}</b> ·{' '}
-                  {rtPackets.length.toLocaleString()} rows here ·{' '}
-                  <Link to="/water/settings">change</Link>
+                  <span title={'How long every transmission is kept on disk before the hourly prune deletes it. Setting: packets_retention_days — Settings → Data → "Keep transmissions for (days)". About 2 MB per day for your meter alone.'}>
+                    keeping <b>{rt.retention_days} day{rt.retention_days === 1 ? '' : 's'}</b>
+                    <i className="w-q">?</i>
+                  </span>
+                  {' · '}
+                  <span title="Transmissions loaded into this view. Governed by the range chips (how far back) and the rows chips (how many) — nothing to do with how long they are kept.">
+                    {rtPackets.length.toLocaleString()} in this window<i className="w-q">?</i>
+                  </span>
+                  {' · '}
+                  <Link to="/water/settings#packets_retention_days" title="Jump to this setting">change</Link>
                 </span>
               ) : null}
             </>
@@ -481,7 +518,7 @@ export default function Monitor() {
         {/* Continuous-run meter. THE measurement: every fixture in a house stops on its own, so
             duration without a break is what separates "someone showered" from "something broke".
             Server-computed, so it survives a reload and is not capped by the chart window. */}
-        <div className={'w-run w-run-' + run.level} role="status">
+        <div className={'w-run w-run-' + run.level} role="status" title={METRIC_HELP.run}>
           <span className="w-run-icon" aria-hidden="true">{RUN[run.level].icon}</span>
           <span className="w-run-body">
             <span className="w-run-head">
@@ -503,7 +540,7 @@ export default function Monitor() {
               {liveOdo === null || liveOdo === undefined ? '—' : Number(liveOdo).toLocaleString()}
               <span> gal</span>
             </div>
-            <div className="w-readout-lab">meter reading now</div>
+            <div className="w-readout-lab" title={METRIC_HELP.reading}>meter reading now <i className="w-q">?</i></div>
           </div>
           {mode === 'realtime' ? (
             <>
@@ -511,21 +548,23 @@ export default function Monitor() {
                 <div className={'w-readout-sm w-since ' + sinceClass(secsSince)} key={beat}>
                   {secsSince === null ? '—' : secsSince + 's'}
                 </div>
-                <div className="w-readout-lab">since last packet</div>
+                <div className="w-readout-lab" title={METRIC_HELP.since}>since last packet <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className="w-readout-sm">{rtMine.length.toLocaleString()}</div>
-                <div className="w-readout-lab">transmissions shown</div>
+                <div className="w-readout-lab" title={METRIC_HELP.shown}>transmissions shown <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className="w-readout-sm">{rt && rt.interval_seconds ? rt.interval_seconds + 's' : '—'}</div>
-                <div className="w-readout-lab">measured interval</div>
+                <div className="w-readout-lab" title={METRIC_HELP.interval}>measured interval <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className={'w-readout-sm ' + (rtDecodePct !== null && rtDecodePct < 90 ? 'w-since warn' : 'w-since good')}>
                   {rtDecodePct === null ? '—' : rtDecodePct.toFixed(1) + ' %'}
                 </div>
-                <div className="w-readout-lab">decoded</div>
+                <div className="w-readout-lab" title={METRIC_HELP.decoded}>
+                  {rtCoverage && rtCoverage.partial ? 'decoded since ' + String(rtCoverage.first_mtn || '').slice(11, 16) : 'decoded'} <i className="w-q">?</i>
+                </div>
               </div>
               <div>
                 {/* The badge, not the bare number. "20.6 dB" means nothing without a scale. */}
@@ -534,13 +573,13 @@ export default function Monitor() {
                   {rtLastSnr === null ? '—' : rtLastSnr.toFixed(1) + ' dB'}
                   {rtSnrBand ? <span className="w-sig-tag">{rtSnrBand.label}</span> : null}
                 </div>
-                <div className="w-readout-lab">signal (snr)</div>
+                <div className="w-readout-lab" title={METRIC_HELP.snr}>signal (snr) <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className="w-readout-sm" style={{ color: rt && rt.gaps && rt.gaps.length ? 'var(--w-critical)' : undefined }}>
                   {rt && rt.gaps ? rt.gaps.length : 0}
                 </div>
-                <div className="w-readout-lab">gaps</div>
+                <div className="w-readout-lab" title={METRIC_HELP.gaps}>gaps <i className="w-q">?</i></div>
               </div>
             </>
           ) : mode === 'heartbeat' ? (
@@ -554,15 +593,15 @@ export default function Monitor() {
                 <div key={beat} className={'w-readout-sm w-since ' + sinceClass(secsSince)}>
                   {secsSince === null ? '—' : secsSince + 's'}
                 </div>
-                <div className="w-readout-lab">since last packet</div>
+                <div className="w-readout-lab" title={METRIC_HELP.since}>since last packet <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className="w-readout-sm">{usedInWindow.toFixed(1)} gal</div>
-                <div className="w-readout-lab">used in window</div>
+                <div className="w-readout-lab" title={METRIC_HELP.used_window}>used in window <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className="w-readout-sm">{pulseAvg.toFixed(1)} /min</div>
-                <div className="w-readout-lab">pulse</div>
+                <div className="w-readout-lab" title={METRIC_HELP.pulse}>pulse <i className="w-q">?</i></div>
               </div>
               <div>
                 <div className="w-readout-sm">{snrAvg === null ? '—' : snrAvg.toFixed(1) + ' dB'}</div>
@@ -951,10 +990,10 @@ function DataTable({ headers, rows, note }) {
   );
 }
 
-function Tile({ label, value, note, alarm }) {
+function Tile({ label, value, note, alarm, help }) {
   return (
     <div className="w-tile">
-      <div className="w-tile-label">{label}</div>
+      <div className="w-tile-label" title={help || undefined}>{label}{help ? <i className="w-q">?</i> : null}</div>
       <div className="w-tile-value">
         {Number(value).toFixed(value < 10 ? 1 : 0)}<span className="w-tile-unit">gal</span>
       </div>

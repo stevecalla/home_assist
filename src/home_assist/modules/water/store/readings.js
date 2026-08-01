@@ -227,12 +227,22 @@ async function packet_count(meter_id, hours, scope) {
   const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
   const where = scope === 'all' ? '' : ' AND meter_id = ' + Number(meter_id);
   const rows = await db.query(
-    'SELECT COUNT(*) AS total, SUM(is_ours) AS ours FROM water_packets ' +
+    'SELECT COUNT(*) AS total, SUM(is_ours) AS ours, ' +
+    // The OLDEST row in the window. Without it there is no way to tell "the radio missed 86% of
+    // the last day" from "we only started recording three hours ago" — and those are opposite
+    // conclusions about the same antenna.
+    '       MIN(heard_at_utc) AS first_utc, MIN(heard_at_mtn) AS first_mtn ' +
+    'FROM water_packets ' +
     'WHERE heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ? SECOND)' + where,
     [Math.round(h * 3600)]
   );
   const r = rows[0] || {};
-  return { total: Number(r.total || 0), ours: Number(r.ours || 0) };
+  return {
+    total: Number(r.total || 0),
+    ours: Number(r.ours || 0),
+    first_utc: r.first_utc || null,
+    first_mtn: r.first_mtn || null,
+  };
 }
 
 /** Who else is out there, and how well we hear them. The antenna scoreboard. */

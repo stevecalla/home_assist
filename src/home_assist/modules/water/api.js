@@ -146,6 +146,10 @@ function mount(app) {
         alerts_retention_days: cfg.alerts_retention_days,
       },
       meter: { id: cfg.meter_id, name: cfg.meter_name, gallons_per_unit: cfg.gallons_per_unit },
+      // The Real time tab's vocabulary, served from the SAME constants the badge and the gap
+      // detector use — so the Reference page cannot drift from the thing it documents.
+      signal_quality: rules.SIGNAL_QUALITY,
+      packet_columns: PACKET_COLUMNS,
     });
   }));
 
@@ -266,6 +270,21 @@ function mount(app) {
 
     const ours = packets.filter(function (p) { return p.is_ours; });
     const interval = rules.median_interval(ours);
+
+    const window_seconds = Math.round(hours * 3600);
+    const first_at = counts.first_utc
+      ? new Date(String(counts.first_utc).replace(' ', 'T') + 'Z') : null;
+    const covered = first_at
+      ? Math.min(window_seconds, Math.max(interval, Math.round((now - first_at) / 1000)))
+      : 0;
+    const coverage = {
+      seconds: covered,
+      window_seconds: window_seconds,
+      // Below ~95% the window reaches back further than the recording does, and the UI should say
+      // "recording since 12:31" rather than quote a percentage of something it never saw.
+      partial: covered < window_seconds * 0.95,
+      first_mtn: counts.first_mtn || null,
+    };
     res.json({
       ok: true, tz, hours, scope,
       // What was returned vs what is there. The UI must be able to tell the difference, or a
@@ -277,8 +296,17 @@ function mount(app) {
         limit: LIMIT,
         truncated: counts.total > packets.length,
       },
-      // Measured against the FULL window count, never against the truncated array.
-      decode: rules.decode_rate({ length: counts.ours }, interval, hours * 3600),
+      // Measured against the FULL window count, never against the truncated array — and against
+      // the span actually COVERED, not the span requested.
+      //
+      // The bug this replaces: dividing by the whole window. Enable packet recording, open the 24h
+      // view three hours later, and the tab reported 13.9% decoded — which reads as "the radio is
+      // missing six packets in seven" when the real answer is "we have only been recording for
+      // three of these twenty-four hours". Same number, opposite conclusions, and the alarming one
+      // was the one on screen. Coverage and reception are different facts and now they are two
+      // different fields.
+      decode: rules.decode_rate({ length: counts.ours }, interval, coverage.seconds),
+      coverage: coverage,
       meter_id: cfg.meter_id,
       enabled: !!cfg.packets_enabled,
       capture_all: !!cfg.packets_capture_all_meters,
