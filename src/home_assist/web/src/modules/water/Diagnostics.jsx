@@ -147,13 +147,18 @@ export default function Diagnostics() {
         ) : (
           <div style={{ maxHeight: 320, overflow: 'auto' }}>
             <table className="w-table">
-              <thead><tr><th>Seen (UTC)</th><th>What happened</th><th>Line</th></tr></thead>
+              <thead><tr><th>Seen (local)</th><th>What happened</th><th>Line</th></tr></thead>
               <tbody>
                 {raw.map((s) => {
                   const r = reason_of(s.reason);
                   return (
                     <tr key={s.id}>
-                      <td style={{ whiteSpace: 'nowrap' }}>{s.seen_at_utc}</td>
+                      {/* Local, like every other timestamp in the app. The UTC fallback is for rows
+                          written before seen_at_mtn existed — an old row should still render, and it
+                          is marked so nobody compares it against a local one by mistake. */}
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {s.seen_at_mtn || <span title="written before local stamps were recorded">{s.seen_at_utc} <span className="muted small">UTC</span></span>}
+                      </td>
                       <td style={{ whiteSpace: 'nowrap', color: r.good === false ? 'var(--w-critical)' : 'inherit', fontWeight: r.good === false ? 600 : 400 }}>
                         {r.good === true ? '✓ ' : r.good === false ? '✕ ' : ''}{r.label}
                       </td>

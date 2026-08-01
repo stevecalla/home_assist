@@ -658,3 +658,40 @@
 .w-swatch.serious { background: var(--w-serious); }
 .w-table tr.is-other td { color: var(--w-axis); }
 .w-table tr.is-mine td { font-weight: 600; }
+
+/* ── live table behaviour ────────────────────────────────────────────────────
+   The LIVE chip pulses only while the table is mounted and polling; the "N new"
+   pill only exists when you have scrolled away from the top. Both are absent
+   when they would mean nothing, which is what makes them worth reading. */
+.w-grid-wrap { position: relative; }
+.w-grid-live {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .06em;
+  color: var(--w-good); border: 1px solid var(--w-good);
+  border-radius: 999px; padding: 1px 8px;
+}
+.w-grid-live i {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: block;
+  animation: w-pulse-dot 1.5s ease-in-out infinite;
+}
+@keyframes w-pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .18; } }
+
+.w-grid-new {
+  position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 5;
+  font: inherit; font-size: 11px; font-weight: 700; padding: 3px 12px; cursor: pointer;
+  border: 0; border-radius: 999px; background: var(--w-good); color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
+.w-grid-new:hover { filter: brightness(1.08); }
+
+/* A row that just landed. One shot — a row that arrives, is read, and stays must stop
+   announcing itself, or the whole table reads as permanently new. */
+@keyframes w-row-in {
+  0%   { background: rgba(12, 163, 12, .30); }
+  100% { background: transparent; }
+}
+.w-grid-table tbody tr.is-new td { animation: w-row-in 1.4s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .w-grid-live i, .w-grid-table tbody tr.is-new td { animation: none; }
+}

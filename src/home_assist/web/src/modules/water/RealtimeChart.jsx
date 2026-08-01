@@ -48,6 +48,7 @@ function fmtClock(ms, tz, seconds) {
 export default function RealtimeChart({
   packets = [],       // [{ heard_at_utc, volume, snr, rssi, is_ours }] oldest first, OUR meter
   gaps = [],          // [{ start, end, seconds, missed, snr_before, snr_after }]
+  secondsSince = null,// seconds since the last packet, aged by the parent's 1s tick
   tz,
   height = 260,
   emptyMessage = 'Waiting for the first transmission…',
@@ -177,8 +178,17 @@ export default function RealtimeChart({
         <text x={padL - 6} y={pkTop + 4} textAnchor="end" fontSize="10" fill="var(--w-axis)">packets</text>
         {pts.map((p, i) => {
           const px = x(new Date(p.heard_at_utc).getTime());
-          return <line key={'p' + i} x1={px} x2={px} y1={pkTop} y2={pkTop - 10}
-                       stroke="var(--w-good)" strokeWidth="1" />;
+          const newest = i === pts.length - 1;
+          return (
+            <line key={'p' + p.heard_at_utc} x1={px} x2={px} y1={pkTop} y2={pkTop - (newest ? 13 : 10)}
+                  stroke="var(--w-good)" strokeWidth={newest ? 2 : 1}>
+              {/* Keyed on the timestamp so React MOUNTS a new element per arrival and the animation
+                  replays. Keyed on the index it would reuse the node and the tick would simply
+                  appear — which is the "did anything just happen?" problem this exists to answer. */}
+              {newest ? <animate attributeName="y2" from={pkTop} to={pkTop - 13} dur="0.3s" /> : null}
+              {newest ? <animate attributeName="stroke-width" values="4;2" dur="0.55s" /> : null}
+            </line>
+          );
         })}
         {gaps.map((g, i) => {
           const gs = Math.max(new Date(g.start).getTime(), t0);
@@ -188,6 +198,29 @@ export default function RealtimeChart({
                        height={6} fill="var(--w-critical)" />;
         })}
         <line x1={padL} x2={W - padR} y1={pkTop} y2={pkTop} stroke="var(--w-grid)" strokeWidth="0.6" />
+
+        {/* ── the live edge ────────────────────────────────────────────────────────────────────
+            Every point on this chart is live, so the Heartbeat's dashed "stored | live" divider
+            would be meaningless here — there is nothing stale to divide from. What is needed
+            instead is proof the RIGHT EDGE is still moving: a pulsing marker anchored to the
+            newest packet, plus the elapsed seconds since it landed. A marker that stops pulsing,
+            or a number that keeps climbing, is the failure showing itself. */}
+        <line x1={lastX} x2={lastX} y1={padT} y2={pkTop} stroke="var(--w-good)"
+              strokeWidth="1" strokeDasharray="2 3" opacity="0.45" />
+        <circle cx={lastX} cy={pkTop - 6} r="3.2" fill="var(--w-good)">
+          <animate attributeName="opacity" values="1;0.15;1" dur="1.5s" repeatCount="indefinite" />
+        </circle>
+        <g transform={'translate(' + Math.min(lastX + 6, W - padR - 46) + ',' + (padT + 2) + ')'}>
+          <circle cx="4" cy="4" r="3.2" fill="var(--w-good)">
+            <animate attributeName="opacity" values="1;0.2;1" dur="1.5s" repeatCount="indefinite" />
+          </circle>
+          <text x="11" y="7.5" fontSize="9" fontWeight="700" fill="var(--w-good)">LIVE</text>
+          {secondsSince === null ? null : (
+            <text x="11" y="19" fontSize="9" fill={secondsSince > 30 ? 'var(--w-critical)' : 'var(--w-axis)'}>
+              {secondsSince}s ago
+            </text>
+          )}
+        </g>
 
         {(() => {
           const out = [];

@@ -399,11 +399,16 @@ function mount(app) {
 
   // ── diagnostics: the raw decoder lines, for "are the field names what we think?" ──
   app.get('/api/water/raw', require_panel('water-admin'), guard(async function (req, res) {
+    // seen_at_mtn as well as _utc. This endpoint returned only UTC and the Diagnostics table
+    // rendered it under a "Seen (UTC)" heading — honestly labelled, but it made this the one table
+    // in the app on a different clock from every other. Comparing a raw line against a pm2 log or
+    // against the heartbeat above it then meant doing timezone arithmetic in your head, which is
+    // exactly the tax the dual-timestamp convention exists to remove.
     const rows = await db.query(
-      'SELECT id, seen_at_utc, reason, line FROM water_raw_samples ORDER BY id DESC LIMIT ?',
+      'SELECT id, seen_at_utc, seen_at_mtn, reason, line FROM water_raw_samples ORDER BY id DESC LIMIT ?',
       [Math.max(1, Math.min(Number(req.query.limit) || 20, 200))]
     );
-    res.json({ ok: true, samples: rows });
+    res.json({ ok: true, tz: time.zone(), samples: rows });
   }));
 }
 

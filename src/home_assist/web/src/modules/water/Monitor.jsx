@@ -42,7 +42,7 @@ const DAY_CHIPS = [7, 30, 90, 365];
 // Minutes, for the Real time tab. 15 minutes is about 225 transmissions — enough to see the shape
 // of the last few gallons without the packet lane becoming a solid block.
 const RT_CHIPS = [{ m: 15, label: '15m' }, { m: 60, label: '1h' }, { m: 360, label: '6h' }, { m: 1440, label: '24h' }];
-const RT_MS = 6000;         // the packets poll: fast enough to feel live, slow enough to be cheap
+const RT_MS = 4000;         // matched to the meter's transmit cadence — a new row per poll
 
 const MODE_TITLE = {
   realtime: 'Water — every transmission',
@@ -544,6 +544,8 @@ export default function Monitor() {
                 columns={rtCols}
                 rows={rtGrid}
                 initialSort={null}
+                live
+                liveLabel="new transmissions"
                 filterPlaceholder="Filter — try a meter id, CRC, or a volume"
                 renderCell={renderPacketCell(rt && rt.quality, status.meter_id)}
                 emptyMessage={rt && !rt.enabled
@@ -563,6 +565,7 @@ export default function Monitor() {
                 <RealtimeChart
                   packets={rtMine}
                   gaps={rt ? rt.gaps : []}
+                  secondsSince={secsSince}
                   tz={status.tz}
                   height={280}
                   emptyMessage={rt && !rt.enabled

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useLayoutEffect, useEffect } from 'react';
 
 /**
  * DataGrid — a table that behaves like one: sort, filter, sticky header, row hover, and a
@@ -11,6 +11,21 @@ import { useMemo, useState } from 'react';
  * Sorting is client-side over the rows already fetched, and the footer says how many of how many
  * are on screen. That distinction matters: sorting 500 of 13,000 rows by RSSI shows you the weakest
  * of the RECENT ones, not the weakest overall, and a grid that hides that is lying quietly.
+ *
+ * LIVE BEHAVIOUR (`live` prop). Rows arrive newest-first while you are looking at them, and the
+ * right response depends on where you are:
+ *
+ *   At the top    stay pinned at the top. New rows appear under the header as they land, which is
+ *                 the whole point of a live table, and each is flashed briefly so an arrival is
+ *                 motion rather than a silently longer list.
+ *   Scrolled away you are READING something. Prepending rows would shove that line down the screen
+ *                 mid-sentence, so the scroll offset is adjusted by exactly the height of what was
+ *                 inserted — your row does not move a pixel — and a "N new" pill appears. Clicking
+ *                 it returns you to the top and clears the count.
+ *
+ * Auto-scrolling someone away from what they were reading is the failure mode this avoids; a table
+ * that silently swallows new rows while you look away is the other. The pill is what lets both be
+ * true at once.
  */
 
 // A value's rendered form and its sort key are different problems. "916.4512" sorts as a number;
@@ -40,9 +55,17 @@ export default function DataGrid({
   totalRows,            // the count BEFORE the fetch limit, if larger than rows.length
   emptyMessage = 'Nothing in this window yet.',
   maxHeight = 380,
+  live = false,         // newest-first and arriving continuously
+  liveLabel = 'new',
 }) {
   const [sort, setSort] = useState(initialSort || null);
   const [q, setQ] = useState('');
+  const [newCount, setNewCount] = useState(0);
+  const [flash, setFlash] = useState(() => new Set());
+
+  const scrollRef = useRef(null);
+  const atTopRef = useRef(true);
+  const seenRef = useRef(null);          // null until the first render, so row 1 does not "flash in"
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -71,6 +94,60 @@ export default function DataGrid({
   const shown = sorted.length;
   const total = totalRows !== undefined && totalRows !== null ? totalRows : (rows || []).length;
 
+  // ── live arrivals ──────────────────────────────────────────────────────────────────────────
+  // useLayoutEffect, not useEffect: the scroll correction has to happen in the same frame the new
+  // rows are painted. One frame late and you watch your reading position jump and snap back.
+  useLayoutEffect(() => {
+    if (!live) return;
+    const el = scrollRef.current;
+    const keys = sorted.map((r, i) => r._key || i);
+    const seen = seenRef.current;
+
+    if (seen === null) {                       // first paint — everything is "already there"
+      seenRef.current = new Set(keys);
+      return;
+    }
+
+    const fresh = keys.filter((k) => !seen.has(k));
+    keys.forEach((k) => seen.add(k));
+    // The set would otherwise grow without bound over a long session on a fast table.
+    if (seen.size > 12000) seenRef.current = new Set(keys);
+    if (!fresh.length || !el) return;
+
+    if (atTopRef.current) {
+      el.scrollTop = 0;
+      setFlash(new Set(fresh));
+    } else {
+      // Hold the reader's line exactly where it was. Measuring the rendered rows rather than
+      // assuming a fixed height keeps this correct when a cell wraps or the font changes.
+      const rowEls = el.querySelectorAll('tbody tr');
+      let delta = 0;
+      for (let i = 0; i < fresh.length && i < rowEls.length; i++) delta += rowEls[i].offsetHeight;
+      el.scrollTop += delta;
+      setNewCount((n) => n + fresh.length);
+    }
+  }, [sorted, live]);
+
+  // The flash is a one-shot: clear it so a row that arrives, is read, and stays does not keep
+  // announcing itself.
+  useEffect(() => {
+    if (!flash.size) return undefined;
+    const id = setTimeout(() => setFlash(new Set()), 1400);
+    return () => clearTimeout(id);
+  }, [flash]);
+
+  function onScroll(e) {
+    const top = e.currentTarget.scrollTop <= 6;
+    atTopRef.current = top;
+    if (top && newCount) setNewCount(0);
+  }
+
+  function toTop() {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    atTopRef.current = true;
+    setNewCount(0);
+  }
+
   return (
     <div className="w-grid">
       <div className="w-grid-bar">
@@ -87,12 +164,23 @@ export default function DataGrid({
             ↕ sorted by {sort.key} — reset
           </button>
         ) : null}
+        {live ? (
+          <span className="w-grid-live" title="This table is updating as transmissions arrive">
+            <i aria-hidden="true" />LIVE
+          </span>
+        ) : null}
         <span className="w-grid-count">
           {shown.toLocaleString()}{shown !== total ? ' of ' + total.toLocaleString() : ''} rows
         </span>
       </div>
 
-      <div className="w-grid-scroll" style={{ maxHeight }}>
+      <div className="w-grid-wrap">
+        {newCount ? (
+          <button type="button" className="w-grid-new" onClick={toTop}>
+            ↑ {newCount.toLocaleString()} {liveLabel}
+          </button>
+        ) : null}
+        <div className="w-grid-scroll" ref={scrollRef} onScroll={onScroll} style={{ maxHeight }}>
         <table className="w-grid-table">
           <thead>
             <tr>
@@ -122,7 +210,9 @@ export default function DataGrid({
             {!sorted.length ? (
               <tr><td colSpan={columns.length} className="w-grid-empty">{q ? 'Nothing matches "' + q + '".' : emptyMessage}</td></tr>
             ) : sorted.map((r, i) => (
-              <tr key={r._key || i} className={r._highlight ? 'is-mine' : (r._dim ? 'is-other' : '')}>
+              <tr key={r._key || i}
+                  className={(r._highlight ? 'is-mine' : (r._dim ? 'is-other' : '')) +
+                    (flash.has(r._key || i) ? ' is-new' : '')}>
                 {columns.map((c) => (
                   <td key={c.key} className={'align-' + (c.align || 'center')}>
                     {renderCell ? renderCell(c, r[c.key], r) : fallback(r[c.key])}
@@ -131,7 +221,8 @@ export default function DataGrid({
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );
