@@ -30,6 +30,18 @@ const mailer = require('../../../notify/mailer');
 const { create_limiter } = require('../../../rate_limit');
 
 const TICK_MS = 60 * 1000;
+
+// The packet buffer flushes on its OWN timer, not on the 60-second tick.
+//
+// This was the bug: buffering per packet and flushing per tick meant water_packets gained rows once
+// a MINUTE, in batches of fifteen. The Real time tab polled every four seconds and correctly showed
+// nothing new for fifty-six of them, then fifteen rows at once. A "real time" view fed by a
+// once-a-minute write is not real time, however fast the browser asks.
+//
+// Five seconds is one INSERT of one or two rows — cheaper than the per-packet round trip this
+// buffer exists to avoid, and fast enough that a row is on screen about as soon as the radio
+// decoded it.
+const PACKET_FLUSH_MS = 5 * 1000;
 // A decoder field that is present but not a number (or absent entirely) must become NULL, not 0 —
 // "the radio did not report this" and "the radio reported zero" are different facts, and -M level
 // being off is exactly the case that produces the first one.
@@ -283,15 +295,6 @@ async function create_collector(options) {
       // Persist what the radio heard this minute BEFORE anything else in the tick can fail. This
       // is the record you go looking for when the dashboard is empty and you need to know whether
       // the radio was the problem — so it must survive a bad hour, not depend on one.
-      // Flush the packet buffer first. Best-effort like every other diagnostic: a failure here
-      // must never stop the reception row or the leak rules that follow it.
-      if (packet_buf.length) {
-        const batch = packet_buf;
-        packet_buf = [];
-        try { await readings.record_packets(batch); }
-        catch (e) { console.error('packet flush failed: ' + e.message); }
-      }
-
       await readings.record_reception(meter_id, now, {
         packets_total: rx_total,
         packets_ours: rx_ours,
@@ -376,7 +379,26 @@ async function create_collector(options) {
     },
   });
 
+  // Best-effort, like every other diagnostic: a failure here must never touch ingest, the reception
+  // row, or the leak rules. `flushing` guards against a slow INSERT overlapping the next timer and
+  // writing the same batch twice.
+  let flushing = false;
+  async function flush_packets() {
+    if (flushing || !packet_buf.length) return;
+    flushing = true;
+    const batch = packet_buf;
+    packet_buf = [];
+    try {
+      await readings.record_packets(batch);
+    } catch (e) {
+      console.error('packet flush failed: ' + e.message);
+    } finally {
+      flushing = false;
+    }
+  }
+
   const timer = setInterval(function () { tick(); }, TICK_MS);
+  const packet_timer = setInterval(function () { flush_packets(); }, PACKET_FLUSH_MS);
   await sweep(cfg);                // once at startup, then hourly from tick()
 
   return {
@@ -386,7 +408,7 @@ async function create_collector(options) {
     sweep: sweep,                  // exposed so the CLI can force a prune
     handle_line: handle_line,
     async stop() {
-      clearInterval(timer);
+      clearInterval(timer); clearInterval(packet_timer);
       try { source.stop(); } catch (e) { /* ignore */ }
       mailer.close();
       await db.end();
@@ -394,4 +416,4 @@ async function create_collector(options) {
   };
 }
 
-module.exports = { create_collector, TICK_MS };
+module.exports = { create_collector, TICK_MS, PACKET_FLUSH_MS };

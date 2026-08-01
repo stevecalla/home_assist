@@ -139,6 +139,34 @@ test('every packet column has a tooltip, and the tooltip says what good looks li
   });
 });
 
+test('packets are flushed on their own fast timer, not on the 60-second tick', function () {
+  // The bug this pins: the buffer was flushed inside tick(), so water_packets gained rows once a
+  // MINUTE in batches of fifteen. The Real time tab polled every four seconds and correctly showed
+  // nothing for fifty-six of them, then fifteen rows at once. A live view fed by a once-a-minute
+  // write is not live, no matter how fast the browser asks.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+
+  const m = run.match(/PACKET_FLUSH_MS\s*=\s*([^;]+);/);
+  assert.ok(m, 'run.js must declare PACKET_FLUSH_MS');
+  const flush_ms = Function('return (' + m[1] + ')')();
+  assert.ok(flush_ms <= 10000, 'a flush slower than 10s is not a real-time view (' + flush_ms + 'ms)');
+
+  const tickm = run.match(/TICK_MS\s*=\s*([^;]+);/);
+  const tick_ms = Function('return (' + tickm[1] + ')')();
+  assert.ok(flush_ms < tick_ms, 'the packet flush must be faster than the rule tick');
+
+  assert.match(run, /setInterval\(function \(\) \{ flush_packets\(\); \}, PACKET_FLUSH_MS\)/,
+    'the flush needs its own interval');
+  // And it must be torn down, or a restarted collector leaks a timer writing from a dead buffer.
+  const stop = run.slice(run.indexOf('async stop()'));
+  assert.match(stop, /clearInterval\(packet_timer\)/, 'stop() must clear the packet timer');
+
+  const tickBody = run.match(/async function tick\([\s\S]*?\n  }\n/);
+  assert.ok(tickBody, 'tick() must exist');
+  assert.ok(tickBody[0].indexOf('record_packets') === -1,
+    'the tick must NOT be what flushes packets — that is the once-a-minute bug');
+});
+
 test('the collector prunes water_packets in the retention sweep', function () {
   // This table writes a row per transmission — ~21,600 a day. It is bounded by the clock, and only
   // if something actually runs the clock.

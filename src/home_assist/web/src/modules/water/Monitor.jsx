@@ -240,9 +240,15 @@ export default function Monitor() {
   const rtCols = rt && rt.columns ? rt.columns : [];
   const rtPackets = rt ? rt.packets : [];
   const rtMine = rtPackets.filter((p) => p.is_ours);
-  const rtGrid = rtPackets.slice().reverse().map((p, i) => ({
+  // The key is (meter_id, heard_at_utc) — the table's PRIMARY KEY, and stable for the life of the
+  // row. It briefly included the array index, which was wrong in a way that only shows up live:
+  // rows are newest-first, so ONE arrival at the top shifted every index below it and therefore
+  // changed every key. React then remounted the whole table on every poll, and the grid's
+  // new-row detection saw all 200 rows as fresh — so either everything flashed or nothing did,
+  // and "which row is new" became unanswerable.
+  const rtGrid = rtPackets.slice().reverse().map((p) => ({
     ...p,
-    _key: p.meter_id + '|' + p.heard_at_utc + '|' + i,
+    _key: p.meter_id + '|' + p.heard_at_utc,
     _highlight: p.is_ours,
     _dim: !p.is_ours,
   }));
