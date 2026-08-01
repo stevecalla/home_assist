@@ -49,6 +49,41 @@ function num_or_null(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+/**
+ * Decoder field names, in preference order — the same tolerance `ingest.extract_reading` applies to
+ * the volume field, and for the same reason: rtl_433's JSON keys are not a stable contract.
+ *
+ * INTEGRITY — rtl_433 emits the checksum result as `mic` (Message Integrity Check) across every
+ *   decoder. This code read `Integrity`, which is the name our own SYNTHETIC replay meter emits and
+ *   nothing else does. Replay mode populated the column, the real radio left it NULL, and the
+ *   difference only showed up on live hardware. `Integrity` stays in the list so replay keeps
+ *   working; `mic` is first because it is what the actual decoder says.
+ *
+ * FREQUENCY — for an FSK protocol like the Orion, rtl_433 reports the two tone frequencies as
+ *   `freq1` and `freq2`, not a single `freq`. Either way the field only exists when `-M freq` is in
+ *   WATER_RTL433_ARGS: `-M level` supplies rssi/snr/noise and says nothing about frequency, which is
+ *   why those three populate and this one does not.
+ */
+const INTEGRITY_FIELDS = ['mic', 'Integrity', 'integrity', 'crc', 'CRC'];
+const FREQ_FIELDS = ['freq', 'freq1', 'frequency'];
+
+function first_str(msg, names) {
+  for (const n of names) {
+    if (msg[n] !== undefined && msg[n] !== null && String(msg[n]) !== '') {
+      return String(msg[n]).slice(0, 16);
+    }
+  }
+  return null;
+}
+
+function first_num(msg, names) {
+  for (const n of names) {
+    const v = num_or_null(msg[n]);
+    if (v !== null) return v;
+  }
+  return null;
+}
+
 const RAW_SAMPLE_LIMIT = 20;      // log this many raw lines on startup to confirm field names
 
 // Rejected packets are logged for diagnosis, but the logging must not scale with how badly things
@@ -199,11 +234,11 @@ async function create_collector(options) {
         delta: prev === undefined ? null : Number((vol - prev).toFixed(2)),
         flags_1: num_or_null(msg['Flags-1'] !== undefined ? msg['Flags-1'] : msg.flags_1),
         flags_2: num_or_null(msg['Flags-2'] !== undefined ? msg['Flags-2'] : msg.flags_2),
-        integrity: msg.Integrity === undefined ? null : String(msg.Integrity).slice(0, 16),
+        integrity: first_str(msg, INTEGRITY_FIELDS),
         rssi: num_or_null(msg.rssi),
         snr: num_or_null(msg.snr),
         noise: num_or_null(msg.noise),
-        freq_mhz: num_or_null(msg.freq),
+        freq_mhz: first_num(msg, FREQ_FIELDS),
       });
     }
 

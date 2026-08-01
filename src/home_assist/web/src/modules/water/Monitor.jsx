@@ -87,8 +87,12 @@ export default function Monitor() {
   const lastHeardRef = useRef(null);
   const [err, setErr] = useState('');
 
-  // Meter-card controls
-  const [mode, setMode] = useState('heartbeat');
+  // Meter-card controls.
+  //
+  // Real time, this meter, as a table is the default because it is the view that answers the
+  // question this card exists for — "what is the radio doing right now" — without needing a
+  // reading of the picture first. The other two tabs are context you go looking for.
+  const [mode, setMode] = useState('realtime');
   const [hours, setHours] = useState(72);
   const [days, setDays] = useState(30);
   const [hoursText, setHoursText] = useState('72');
@@ -98,7 +102,14 @@ export default function Monitor() {
   // CollapsibleCard for why a bare boolean is not enough.
   // ⇄ Table: the numbers behind the picture, on screen, without downloading anything. A chart you
   // cannot read the values off is a chart you have to take on faith.
-  const [flipMeter, setFlipMeter] = useState(false);
+  //
+  // Kept PER MODE rather than as one flag. Real time opens as a table (the rows are the point);
+  // Heartbeat and Long view open as charts (the shape is the point). One shared flag would mean
+  // switching tabs silently changed what the other tab looked like, and flipping one to a table
+  // would turn all three into tables.
+  const [flipBy, setFlipBy] = useState({ realtime: true, heartbeat: false, long: false });
+  const flipMeter = !!flipBy[mode];
+  const setFlipMeter = (v) => setFlipBy((f) => ({ ...f, [mode]: v }));
   const [flipHourly, setFlipHourly] = useState(false);
 
   const [force, setForce] = useState({ open: undefined, key: 0 });
@@ -369,6 +380,7 @@ export default function Monitor() {
               id={'water-' + mode}
               title={MODE_TITLE[mode]}
               svgRef={mode === 'long' ? longRef : mode === 'realtime' ? rtRef : hbRef}
+              image={!flipMeter}
               headers={exportHeaders}
               rows={exportRows}
               flip={flipMeter}

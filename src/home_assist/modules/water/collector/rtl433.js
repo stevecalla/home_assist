@@ -22,7 +22,14 @@ const { createInterface } = require('readline');
 const fs = require('fs');
 const { platform_env, platform_env_source } = require('../../../env');
 
-const DEFAULT_ARGS = '-f 916.45M -s 1600k -R 223 -F json';
+// -M level  adds rssi / snr / noise to every decoded packet.
+// -M freq   adds the frequency it landed on (freq1/freq2 for an FSK protocol like the Orion).
+//
+// Both are optional to the decoder and free at runtime — they annotate packets rtl_433 has already
+// demodulated. They are in the DEFAULT so a fresh machine records the signal figures the Real time
+// tab and the antenna scoreboard are built around; without them those columns are simply blank and
+// look like a broken feature rather than an unset flag.
+const DEFAULT_ARGS = '-f 916.45M -s 1600k -R 223 -F json -M level -M freq';
 
 /**
  * The decoder command for THIS machine.

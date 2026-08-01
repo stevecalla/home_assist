@@ -494,11 +494,11 @@ const PACKET_COLUMNS = [
   { key: 'delta', label: 'Delta', align: 'center', type: 'delta',
     help: 'Change since this meter previous packet. Blank is the NORMAL case: the endpoint re-broadcasts the same total every few seconds and only steps when a whole gallon has passed.' },
   { key: 'flags_1', label: 'Flags-1', align: 'center', type: 'num',
-    help: 'Status bits from the endpoint. 0 is the healthy value. Non-zero is undecoded so far -- Badger reserves these for tamper, backflow and leak indications, so a persistent non-zero is worth investigating.' },
+    help: 'Status bits from the endpoint, undecoded by rtl_433. What matters is not the value but whether it CHANGES: a constant number is simply how your endpoint reports its normal state, while a byte that suddenly starts differing is the meter signalling something -- Badger uses these for tamper, backflow and leak indications.' },
   { key: 'flags_2', label: 'Flags-2', align: 'center', type: 'num',
-    help: 'A second status byte from the endpoint, same story as Flags-1. 0 is the healthy value and what you should see on every row. A value that appears and then persists is worth noting against the date -- it is the meter trying to tell you something the decoder does not yet translate.' },
+    help: 'A second status byte, same story as Flags-1: judge it by whether it changes, not by whether it is zero. A steady non-zero value is the endpoint idle state and is not a fault. Note the date if it ever starts moving -- that is the meter telling you something the decoder does not yet translate.' },
   { key: 'integrity', label: 'Integrity', align: 'center', type: 'text',
-    help: 'The checksum the decoder verified. CRC means the packet arrived intact. A packet that fails this check never becomes a row at all -- it becomes a gap, which is the more useful thing to see.' },
+    help: 'The checksum the decoder verified -- rtl_433 reports this as mic. CRC means the packet arrived intact. A packet that FAILS the check never becomes a row at all, it becomes a gap, which is the more useful thing to see. Blank means the decoder did not report a check for this packet.' },
   { key: 'rssi', label: 'RSSI', align: 'center', type: 'rssi', unit: 'dBm',
     help: 'Raw received power. Higher (closer to 0) is stronger; these are negative numbers, so -9 is much stronger than -20. Above -12 is a solid signal. Below -20 you are relying on luck. Needs -M level in WATER_RTL433_ARGS.' },
   { key: 'snr', label: 'SNR', align: 'center', type: 'snr', unit: 'dB',
@@ -506,7 +506,7 @@ const PACKET_COLUMNS = [
   { key: 'noise', label: 'Noise', align: 'center', type: 'num', unit: 'dBm',
     help: 'The noise floor when this packet arrived. Rising noise with unchanged RSSI means new interference nearby, not a weaker meter.' },
   { key: 'freq_mhz', label: 'Freq', align: 'center', type: 'freq', unit: 'MHz',
-    help: 'Where the packet actually landed. The Orion is fixed at 916.45 MHz; drift of more than about 0.01 MHz across many packets suggests the dongle crystal needs a PPM correction.' },
+    help: 'Where the packet actually landed. Requires -M freq in WATER_RTL433_ARGS -- -M level alone gives rssi/snr/noise and no frequency, so this column stays blank without it. The Orion is fixed at 916.45 MHz; drift beyond about 0.01 MHz across many packets suggests the dongle crystal wants a PPM correction.' },
 ];
 
 function packets_sql(meter_id, hours, scope) {

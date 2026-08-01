@@ -139,6 +139,39 @@ test('every packet column has a tooltip, and the tooltip says what good looks li
   });
 });
 
+test('the decoder field names the radio actually uses are the ones we read', function () {
+  // Found on live hardware: `integrity` and `freq_mhz` were NULL for every row while rssi/snr/noise
+  // populated fine. Two separate causes, and both are the same class of mistake — assuming a JSON
+  // key instead of checking one.
+  //
+  //   integrity  rtl_433 reports the checksum result as `mic` on every decoder. The code read
+  //              `Integrity`, which is what our own SYNTHETIC replay meter emits and nothing else
+  //              does. Replay populated the column; the real radio did not. A bug that only exists
+  //              on hardware is exactly the one a replay-mode test cannot catch, so this asserts on
+  //              the field LIST rather than on behaviour.
+  //   freq       for an FSK protocol the tone frequencies come back as freq1/freq2, not freq.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+
+  const integ = run.match(/const INTEGRITY_FIELDS = \[([^\]]+)\]/);
+  assert.ok(integ, 'INTEGRITY_FIELDS must exist');
+  assert.match(integ[1], /'mic'/, "rtl_433 reports the checksum as `mic` — it must be in the list");
+  assert.ok(integ[1].indexOf("'mic'") < integ[1].indexOf("'Integrity'"),
+    'mic must come BEFORE Integrity: the real radio wins over the synthetic one');
+
+  const freq = run.match(/const FREQ_FIELDS = \[([^\]]+)\]/);
+  assert.ok(freq, 'FREQ_FIELDS must exist');
+  assert.match(freq[1], /'freq1'/, 'FSK protocols report freq1/freq2, not freq');
+});
+
+test('the frequency tooltip says which -M flag it needs', function () {
+  // rssi/snr/noise come from `-M level`; frequency needs `-M freq` as well. Without that sentence a
+  // permanently blank column reads as a broken feature rather than an unset flag.
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const i = api.indexOf("key: 'freq_mhz'");
+  assert.ok(i !== -1, 'freq_mhz must be a defined column');
+  assert.match(api.slice(i, i + 600), /-M freq/, 'the tooltip must name the flag it requires');
+});
+
 test('packets are flushed on their own fast timer, not on the 60-second tick', function () {
   // The bug this pins: the buffer was flushed inside tick(), so water_packets gained rows once a
   // MINUTE in batches of fifteen. The Real time tab polled every four seconds and correctly showed
