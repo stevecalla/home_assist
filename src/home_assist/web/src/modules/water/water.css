@@ -575,3 +575,86 @@
    when something is wrong, not every visit. */
 .w-radio-line { margin-top: 2px; }
 .w-radio-model { font-weight: 600; color: var(--ink); }
+
+/* ── DataGrid — a table that behaves like one ─────────────────────────────────
+   Values and headers centred, as asked. */
+.w-grid-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; flex-wrap: wrap; }
+.w-grid-filter {
+  font: inherit; font-size: 12px; padding: 4px 10px; min-width: 250px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink);
+}
+.w-grid-filter:focus { outline: 2px solid var(--w-series); outline-offset: 1px; }
+.w-grid-clear {
+  font: inherit; font-size: 11px; padding: 2px 9px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted);
+}
+.w-grid-count { margin-left: auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.w-grid-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.w-grid-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11.5px; }
+.w-grid-table th {
+  position: sticky; top: 0; z-index: 2; background: var(--panel); padding: 0;
+  border-bottom: 1px solid var(--line); text-align: center;
+}
+.w-grid-th {
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  width: 100%; padding: 6px 8px; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); white-space: nowrap;
+}
+.w-grid-th:hover { color: var(--ink); }
+.w-grid-th:focus-visible { outline: 2px solid var(--w-series); outline-offset: -2px; }
+.w-grid-arrow { font-size: 8px; opacity: .5; }
+.is-sorted .w-grid-arrow { opacity: 1; color: var(--w-series); }
+.is-sorted .w-grid-th { color: var(--ink); }
+/* The "?" marks a header that carries a definition — a tooltip nobody knows about is not a tooltip. */
+.w-grid-info {
+  font-size: 8.5px; font-weight: 700; width: 12px; height: 12px; line-height: 12px;
+  border-radius: 50%; border: 1px solid var(--line); color: var(--muted); cursor: help;
+}
+.w-grid-table td {
+  padding: 3px 8px; border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.w-grid-table td.align-center { text-align: center; }
+.w-grid-table td.align-left { text-align: left; }
+.w-grid-table td.align-right { text-align: right; }
+.w-grid-table tbody tr:hover td { background: var(--w-series-soft); }
+.w-grid-table tbody tr.is-other td { color: var(--w-axis); }
+.w-grid-table tbody tr.is-mine td { background: rgba(12, 163, 12, .06); }
+.w-grid-table tbody tr.is-mine:hover td { background: var(--w-series-soft); }
+.w-grid-empty { text-align: center; padding: 22px 0; color: var(--muted); }
+.w-mono { font-variant-numeric: tabular-nums; }
+.w-id-mine { font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
+.w-id-other { color: var(--w-axis); }
+
+/* ── signal badges ───────────────────────────────────────────────────────────
+   The number alone is not actionable to anyone who has not read an SDR
+   datasheet. Word + colour, never colour alone. */
+.w-sig { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.w-sig-tag {
+  font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 999px; border: 1px solid currentColor;
+}
+.w-sig.strong { color: var(--w-good); }
+.w-sig.ok     { color: var(--w-series); }
+.w-sig.weak   { color: var(--w-warning); }
+.w-sig.poor   { color: var(--w-critical); }
+
+/* ── the meter-scope filter and the retention chip ───────────────────────── */
+.w-filt { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.w-filt button {
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 3px 12px;
+  border: 0; background: var(--panel); color: var(--muted); cursor: pointer;
+}
+.w-filt button + button { border-left: 1px solid var(--line); }
+.w-filt button.on { background: var(--w-good); color: #fff; }
+.w-mem {
+  font-size: 11px; color: var(--muted); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 7px; padding: 2px 9px;
+}
+.w-mem b { color: var(--ink); }
+
+.w-swatch.serious { background: var(--w-serious); }
+.w-table tr.is-other td { color: var(--w-axis); }
+.w-table tr.is-mine td { font-weight: 600; }

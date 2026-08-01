@@ -21,16 +21,35 @@ function useWidth() {
   return [ref, w];
 }
 
-// Clock labels, in the METER's timezone. Relative labels ("2h ago") were tried and rejected: on a
-// 72-hour window you want to say "it started Thursday evening", not do arithmetic.
-function fmtTick(ms, spanMs) {
-  const d = new Date(ms);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  if (spanMs > 36 * 3600e3) {
-    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] + ' ' + hh + ':' + mm;
+/**
+ * Axis labels, in the METER's timezone.
+ *
+ * This used to call getHours()/getDay(), which are the BROWSER's timezone. On the machine in the
+ * house those agree, so it looked correct and was not: opened from a laptop an hour east, every
+ * label on the axis shifted while the banner above it — which has always used Intl with the meter's
+ * zone — did not. Two clocks on one screen disagreeing about the same instant.
+ *
+ * Intl.DateTimeFormat with an explicit timeZone is the only way to be sure, and it is what every
+ * other timestamp in this app already uses.
+ */
+function fmtTick(ms, spanMs, tz) {
+  try {
+    const opts = { timeZone: tz || undefined, hour: '2-digit', minute: '2-digit', hour12: false };
+    // Past 36 hours the hour alone is ambiguous — "08:00" appears three times on a 72h axis.
+    if (spanMs > 36 * 3600e3) opts.weekday = 'short';
+    return new Intl.DateTimeFormat('en-US', opts).format(new Date(ms)).replace(',', '');
+  } catch (e) {
+    return '';
   }
-  return hh + ':' + mm;
+}
+
+/** The hour-of-day, in the meter's zone. Needed to place the overnight band, not the browser's. */
+function hourIn(ms, tz) {
+  try {
+    return Number(new Intl.DateTimeFormat('en-US', {
+      timeZone: tz || undefined, hour: '2-digit', hour12: false,
+    }).format(new Date(ms))) % 24;
+  } catch (e) { return new Date(ms).getHours(); }
 }
 
 // Wall clock in the METER's timezone. The tooltip has to agree with the "Last packet" stamp in the
@@ -191,16 +210,23 @@ export default function HeartbeatChart({
   const fmtUsed = (v) => (usedMax < 4 ? v.toFixed(1) : Math.round(v).toString());
 
   // Overnight bands: one per local night inside the window.
+  // Overnight bands, placed by the METER's hour-of-day.
+  //
+  // The old version walked calendar days with setHours(), which is the browser's zone — so on a
+  // laptop in another state the shaded window drifted away from the 2-5am the alert rule actually
+  // uses. Scanning the minute grid and asking "what hour is this THERE" cannot drift, and it costs
+  // one Intl call per column rather than per row.
   const bands = [];
   if (overnight && overnight.length === 2 && overnight[1] > overnight[0]) {
-    const cur = new Date(t0);
-    cur.setHours(0, 0, 0, 0);
-    for (let day = 0; day <= Math.ceil(span / 86400e3) + 1; day++) {
-      const s = new Date(cur); s.setDate(cur.getDate() + day); s.setHours(overnight[0], 0, 0, 0);
-      const e = new Date(s); e.setHours(overnight[1], 0, 0, 0);
-      if (e.getTime() < t0 || s.getTime() > t1) continue;
-      bands.push([Math.max(s.getTime(), t0), Math.min(e.getTime(), t1)]);
+    let open = null;
+    const stepMs = Math.max(60000, span / 800);
+    for (let t = t0; t <= t1 + stepMs; t += stepMs) {
+      const h = hourIn(Math.min(t, t1), tz);
+      const inside = h >= overnight[0] && h < overnight[1] && t <= t1;
+      if (inside && open === null) open = t;
+      if (!inside && open !== null) { bands.push([open, Math.min(t, t1)]); open = null; }
     }
+    if (open !== null) bands.push([open, t1]);
   }
 
   const pulseMax = Math.max(1, cols.reduce((a, c) => Math.max(a, c.packets), 0));
@@ -370,7 +396,7 @@ export default function HeartbeatChart({
               <g key={'x' + t}>
                 <line x1={px} x2={px} y1={pulseTop + 4} y2={pulseTop + 8} stroke="var(--w-grid)" />
                 <text x={px} y={pulseTop + 21} fontSize="11" fill="var(--w-axis)" textAnchor="middle">
-                  {fmtTick(t, span)}
+                  {fmtTick(t, span, tz)}
                 </text>
               </g>
             );

@@ -1,0 +1,161 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const rules = require('../rules/leak_rules');
+
+// Packets every `step` seconds starting at `t0`, with optional holes.
+function stream(count, step, opts) {
+  const o = opts || {};
+  const skip = new Set(o.skip || []);
+  const t0 = Date.parse('2026-08-01T10:00:00.000Z');
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    if (skip.has(i)) continue;
+    out.push({
+      heard_at_utc: new Date(t0 + i * step * 1000).toISOString(),
+      heard_at_mtn: '2026-08-01 04:00:00',
+      snr: o.snr ? o.snr(i) : 21,
+    });
+  }
+  return out;
+}
+
+// ── median_interval ──────────────────────────────────────────────────────────────────────────
+
+test('the packet interval is measured, not assumed', function () {
+  assert.strictEqual(rules.median_interval(stream(30, 4)), 4);
+  assert.strictEqual(rules.median_interval(stream(30, 7.5)), 7.5);
+});
+
+test('a long dropout does not drag the interval up', function () {
+  // THE reason this is a median and not a mean. One 60s hole in a 4s stream pulls a mean to ~6s,
+  // and a gap detector keyed on 3x that would stop calling 15-second silences gaps at all — the
+  // outliers would quietly redefine "normal" and the detector would go blind to the tail.
+  const pkts = stream(40, 4, { skip: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34] });
+  assert.strictEqual(rules.median_interval(pkts), 4);
+});
+
+test('too few packets falls back to the nominal interval rather than dividing by nothing', function () {
+  assert.strictEqual(rules.median_interval([]), 4);
+  assert.strictEqual(rules.median_interval(stream(2, 4)), 4);
+});
+
+// ── gap_spans ────────────────────────────────────────────────────────────────────────────────
+
+test('an unbroken stream has no gaps', function () {
+  assert.deepStrictEqual(rules.gap_spans(stream(40, 4), 4), []);
+});
+
+test('a dropout is reported with its length and how many were missed', function () {
+  const pkts = stream(20, 4, { skip: [10, 11, 12] });   // 16 s between packet 9 and packet 13
+  const gaps = rules.gap_spans(pkts, 4);
+  assert.strictEqual(gaps.length, 1);
+  assert.strictEqual(gaps[0].seconds, 16);
+  assert.strictEqual(gaps[0].missed, 3);
+});
+
+test('normal jitter is not a gap', function () {
+  // One interval of 8s in a 4s stream is 2x — under the 3x threshold. A detector that flagged this
+  // would produce a gap list nobody reads, which is the same as having no gap list.
+  const pkts = stream(20, 4, { skip: [10] });
+  assert.deepStrictEqual(rules.gap_spans(pkts, 4), []);
+});
+
+test('a gap carries the signal either side, because that is the diagnosis', function () {
+  // Signal collapsing across a gap is a path problem — something moved, something got wet. Signal
+  // unchanged across a gap is interference or a stalled receiver. The number alone cannot tell you
+  // which; the pair can.
+  const pkts = stream(20, 4, { skip: [10, 11, 12], snr: (i) => (i < 10 ? 21 : 11) });
+  const g = rules.gap_spans(pkts, 4)[0];
+  assert.strictEqual(g.snr_before, 21);
+  assert.strictEqual(g.snr_after, 11);
+});
+
+test('the gap threshold scales with the measured interval', function () {
+  // A 20-second endpoint has a 60-second threshold. Hardcoding "anything over 12s is a gap" would
+  // report a continuous gap on any meter that does not transmit every 4 seconds.
+  const pkts = stream(20, 20, { skip: [10] });          // 40 s hole, 2x — not a gap at this cadence
+  assert.deepStrictEqual(rules.gap_spans(pkts, 20), []);
+});
+
+// ── signal bands ─────────────────────────────────────────────────────────────────────────────
+
+test('signal bands name the number instead of just printing it', function () {
+  assert.strictEqual(rules.signal_band('snr', 22).level, 'strong');
+  assert.strictEqual(rules.signal_band('snr', 14).level, 'ok');
+  assert.strictEqual(rules.signal_band('snr', 9).level, 'weak');
+  assert.strictEqual(rules.signal_band('snr', 4).level, 'poor');
+});
+
+test('rssi bands run the right way round for a negative scale', function () {
+  // The trap: -9 is STRONGER than -20. A naive ascending comparison inverts the whole badge and
+  // reports a healthy antenna as failing.
+  assert.strictEqual(rules.signal_band('rssi', -9).level, 'strong');
+  assert.strictEqual(rules.signal_band('rssi', -20).level, 'weak');
+  assert.ok(rules.signal_band('rssi', -9).min > rules.signal_band('rssi', -20).min);
+});
+
+test('a missing reading is not a bad reading', function () {
+  // -M level off means NULL, not zero. Rendering "poor" for a column the radio never reported
+  // would send someone onto the roof to fix an antenna that is fine.
+  assert.strictEqual(rules.signal_band('snr', null), null);
+  assert.strictEqual(rules.signal_band('snr', undefined), null);
+});
+
+// ── decode rate ──────────────────────────────────────────────────────────────────────────────
+
+test('decode rate counts against what SHOULD have arrived', function () {
+  const r = rules.decode_rate(stream(90, 4), 4, 3600);   // 90 heard, 900 expected in an hour
+  assert.strictEqual(r.expected, 900);
+  assert.strictEqual(Math.round(r.pct), 10);
+});
+
+test('decode rate never exceeds 100% when more arrived than predicted', function () {
+  const r = rules.decode_rate(stream(100, 4), 4, 100);
+  assert.ok(r.pct <= 100);
+});
+
+// ── wiring ───────────────────────────────────────────────────────────────────────────────────
+
+test('every packet column has a tooltip, and the tooltip says what good looks like', function () {
+  // A header tooltip that only restates the column name is decoration. The signal columns are the
+  // ones people cannot interpret unaided, so those must carry an actual threshold.
+  const src = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const block = src.slice(src.indexOf('const PACKET_COLUMNS'), src.indexOf('function packets_sql'));
+  ['heard_at_mtn', 'meter_id', 'volume', 'delta', 'flags_1', 'flags_2', 'integrity',
+    'rssi', 'snr', 'noise', 'freq_mhz'].forEach(function (k) {
+    assert.ok(block.indexOf("key: '" + k + "'") !== -1, k + ' must be a defined column');
+  });
+  const helps = block.match(/help: '[^']+'/g) || [];
+  assert.strictEqual(helps.length, 11, 'every column needs a help string');
+  helps.forEach(function (h) {
+    assert.ok(h.length > 90, 'a one-line tooltip that restates the label helps nobody: ' + h);
+  });
+  ['rssi', 'snr'].forEach(function (k) {
+    const i = block.indexOf("key: '" + k + "'");
+    const seg = block.slice(i, i + 700);
+    assert.match(seg, /\d/, k + ' tooltip must name an actual threshold, not just describe the field');
+  });
+});
+
+test('the collector prunes water_packets in the retention sweep', function () {
+  // This table writes a row per transmission — ~21,600 a day. It is bounded by the clock, and only
+  // if something actually runs the clock.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  const sweep = run.match(/async function sweep\([\s\S]*?\n  }/);
+  assert.ok(sweep, 'run.js must have a retention sweep');
+  assert.match(sweep[0], /readings\.prune_packets\(/, 'sweep must prune water_packets');
+});
+
+test('neighbouring meters are captured before the filter and counted after it', function () {
+  // The safety boundary of this whole feature. If the capture ever moves below the `is_ours` gate
+  // the reference signal disappears; if the COUNTING ever moves above it, a neighbour's meter
+  // starts advancing your odometer and firing your alerts.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  const capture = run.indexOf('packet_buf.push(');
+  const gate = run.indexOf('if (!ours_now) return;');
+  assert.ok(capture !== -1 && gate !== -1, 'both the capture and the gate must exist');
+  assert.ok(capture < gate, 'capture must happen BEFORE the our-meter gate, or neighbours are lost');
+  assert.ok(run.indexOf('pkt_ours++') > gate, 'counting must happen AFTER the gate');
+});

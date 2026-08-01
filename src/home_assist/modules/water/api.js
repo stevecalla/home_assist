@@ -142,6 +142,7 @@ function mount(app) {
         raw_sample_keep: cfg.raw_sample_keep,
         readings_retention_days: cfg.readings_retention_days,
         reception_retention_days: cfg.reception_retention_days,
+        packets_retention_days: cfg.packets_retention_days,
         alerts_retention_days: cfg.alerts_retention_days,
       },
       meter: { id: cfg.meter_id, name: cfg.meter_name, gallons_per_unit: cfg.gallons_per_unit },
@@ -224,6 +225,72 @@ function mount(app) {
       run: rules.current_run(recent, now, cfg),
       overnight: [cfg.overnight_start_hour, cfg.overnight_end_hour],
       sql: heartbeat_sql(meter_id, hours),
+    });
+  }));
+
+  // ── packets: the granular, near-real-time record ─────────────────────────────────────────
+  //
+  // One row per decoded transmission. `meter=all` is a DISPLAY filter — what gets captured is
+  // decided by packets_capture_all_meters in settings, not by this query string.
+  app.get('/api/water/packets', require_panel('water'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const tz = time.zone();
+    const now = new Date();
+    const scope = req.query.meter === 'all' ? 'all' : 'mine';
+    const hours = Math.max(0.05, Math.min(Number(req.query.hours) || 1, cfg.packets_retention_days * 24));
+
+    const [rows, heard] = await Promise.all([
+      readings.packet_series(cfg.meter_id, hours, scope, req.query.limit),
+      readings.meters_heard(hours),
+    ]);
+
+    const packets = rows.map(function (r) {
+      return {
+        meter_id: Number(r.meter_id),
+        heard_at_utc: new Date(String(r.heard_at_utc).replace(' ', 'T') + 'Z').toISOString(),
+        heard_at_mtn: r.heard_at_mtn,
+        is_ours: !!r.is_ours,
+        volume: r.volume === null ? null : Number(r.volume),
+        delta: r.delta === null ? null : Number(r.delta),
+        flags_1: r.flags_1, flags_2: r.flags_2, integrity: r.integrity,
+        rssi: r.rssi === null ? null : Number(r.rssi),
+        snr: r.snr === null ? null : Number(r.snr),
+        noise: r.noise === null ? null : Number(r.noise),
+        freq_mhz: r.freq_mhz === null ? null : Number(r.freq_mhz),
+      };
+    });
+
+    const ours = packets.filter(function (p) { return p.is_ours; });
+    res.json({
+      ok: true, tz, hours, scope,
+      meter_id: cfg.meter_id,
+      enabled: !!cfg.packets_enabled,
+      capture_all: !!cfg.packets_capture_all_meters,
+      retention_days: cfg.packets_retention_days,
+      max_hours: cfg.packets_retention_days * 24,
+      // The expected interval is measured, not assumed. A Badger Orion is nominally ~4s, but the
+      // number that matters for "how many did I miss" is what THIS endpoint actually does at THIS
+      // antenna — and that is only knowable by looking.
+      interval_seconds: rules.median_interval(ours),
+      gaps: rules.gap_spans(ours, rules.median_interval(ours)),
+      packets: packets,
+      meters: heard.map(function (m) {
+        return {
+          meter_id: Number(m.meter_id),
+          is_ours: !!m.is_ours,
+          packets: Number(m.packets),
+          rssi_avg: m.rssi_avg === null ? null : Number(Number(m.rssi_avg).toFixed(2)),
+          snr_avg: m.snr_avg === null ? null : Number(Number(m.snr_avg).toFixed(2)),
+          first_seen: m.first_seen,
+          last_seen: m.last_seen,
+        };
+      }),
+      // Thresholds live here, next to the data, so the badge in the UI and any future alert on
+      // signal quality can never disagree about what "weak" means.
+      quality: rules.SIGNAL_QUALITY,
+      columns: PACKET_COLUMNS,
+      sql: packets_sql(cfg.meter_id, hours, scope),
+      now: now.toISOString(),
     });
   }));
 
@@ -400,6 +467,59 @@ function radio_info() {
     sample_rate_khz: rate ? Number(rate[1]) : null,
     args: args || null,
   };
+}
+
+/**
+ * Column definitions for the Real time table.
+ *
+ * Served from the API rather than typed into the React component so that the tooltip explaining a
+ * column and the query producing it live in the same file. A header tooltip that has drifted from
+ * the data underneath it is worse than no tooltip — it is confidently wrong.
+ *
+ * `good` is written for someone who has never read an SDR datasheet. "-9 dBm" means nothing on its
+ * own; "strong — a few feet of coax or a wall away" is the sentence that lets you act.
+ */
+const PACKET_COLUMNS = [
+  { key: 'heard_at_mtn', label: 'Heard at', align: 'center', type: 'time',
+    help: 'When the receiver decoded this transmission, to the millisecond, in the meter timezone. NOT when the water moved -- the meter reports its running total, it does not report events.' },
+  { key: 'meter_id', label: 'Meter', align: 'center', type: 'id',
+    help: 'The endpoint serial broadcast in the packet. Yours is highlighted. Anything else is a neighbour: captured for antenna comparison, never counted toward your usage.' },
+  { key: 'volume', label: 'Volume', align: 'center', type: 'num',
+    help: 'The lifetime odometer exactly as transmitted, before gallons_per_unit is applied. The same number as the dial in the pit.' },
+  { key: 'delta', label: 'Delta', align: 'center', type: 'delta',
+    help: 'Change since this meter previous packet. Blank is the NORMAL case: the endpoint re-broadcasts the same total every few seconds and only steps when a whole gallon has passed.' },
+  { key: 'flags_1', label: 'Flags-1', align: 'center', type: 'num',
+    help: 'Status bits from the endpoint. 0 is the healthy value. Non-zero is undecoded so far -- Badger reserves these for tamper, backflow and leak indications, so a persistent non-zero is worth investigating.' },
+  { key: 'flags_2', label: 'Flags-2', align: 'center', type: 'num',
+    help: 'A second status byte from the endpoint, same story as Flags-1. 0 is the healthy value and what you should see on every row. A value that appears and then persists is worth noting against the date -- it is the meter trying to tell you something the decoder does not yet translate.' },
+  { key: 'integrity', label: 'Integrity', align: 'center', type: 'text',
+    help: 'The checksum the decoder verified. CRC means the packet arrived intact. A packet that fails this check never becomes a row at all -- it becomes a gap, which is the more useful thing to see.' },
+  { key: 'rssi', label: 'RSSI', align: 'center', type: 'rssi', unit: 'dBm',
+    help: 'Raw received power. Higher (closer to 0) is stronger; these are negative numbers, so -9 is much stronger than -20. Above -12 is a solid signal. Below -20 you are relying on luck. Needs -M level in WATER_RTL433_ARGS.' },
+  { key: 'snr', label: 'SNR', align: 'center', type: 'snr', unit: 'dB',
+    help: 'How far the signal sits above the background noise -- the number that actually predicts whether a packet decodes. Above 18 dB is comfortable, 10-18 dB works but drops packets, below 10 dB is where gaps start. Move the antenna to raise this one.' },
+  { key: 'noise', label: 'Noise', align: 'center', type: 'num', unit: 'dBm',
+    help: 'The noise floor when this packet arrived. Rising noise with unchanged RSSI means new interference nearby, not a weaker meter.' },
+  { key: 'freq_mhz', label: 'Freq', align: 'center', type: 'freq', unit: 'MHz',
+    help: 'Where the packet actually landed. The Orion is fixed at 916.45 MHz; drift of more than about 0.01 MHz across many packets suggests the dongle crystal needs a PPM correction.' },
+];
+
+function packets_sql(meter_id, hours, scope) {
+  const secs = Math.round(hours * 3600);
+  return [
+    { label: 'Every transmission in the window', table: 'water_packets', text:
+      'SELECT heard_at_mtn, meter_id, is_ours, volume, `delta`, flags_1, flags_2,\n' +
+      '       integrity, rssi, snr, noise, freq_mhz\n' +
+      'FROM   water_packets\n' +
+      'WHERE  heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ' + secs + ' SECOND)\n' +
+      (scope === 'all' ? '' : '  AND  meter_id = ' + meter_id + '\n') +
+      'ORDER BY heard_at_utc;   -- one row per decoded packet' },
+    { label: 'Meters heard (the antenna scoreboard)', table: 'water_packets', text:
+      'SELECT meter_id, COUNT(*) AS packets, AVG(rssi) AS rssi_avg, AVG(snr) AS snr_avg\n' +
+      'FROM   water_packets\n' +
+      'WHERE  heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ' + secs + ' SECOND)\n' +
+      'GROUP BY meter_id ORDER BY packets DESC;' },
+  ];
 }
 
 module.exports = { mount };

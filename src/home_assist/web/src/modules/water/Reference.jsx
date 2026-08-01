@@ -239,6 +239,16 @@ export default function Reference() {
                 pruned hourly.</td>
             </tr>
             <tr>
+              <td><code>water_packets</code></td>
+              <td>One decoded transmission — every meter in range. The Real time tab. Neighbours are
+                captured for antenna comparison and never counted.</td>
+              <td>7,884,000 <span className="muted small">if never pruned</span></td>
+              <td><strong>{ref.retention.packets_retention_days || 1} day
+                {(ref.retention.packets_retention_days || 1) === 1 ? '' : 's'}</strong> — about{' '}
+                {((ref.retention.packets_retention_days || 1) * 21600).toLocaleString()} rows a day
+                for your meter, roughly 3× that with two neighbours in range. ~2 MB/day.</td>
+            </tr>
+            <tr>
               <td><code>water_alerts</code></td>
               <td>One alert. Also the cooldown ledger.</td>
               <td>a few hundred</td>
@@ -265,12 +275,14 @@ export default function Reference() {
           </tbody>
         </table>
         <p className="w-chart-sub small" style={{ marginTop: 10 }}>
-          <strong>The one table that could run away is <code>water_reception</code></strong>, because it
-          writes a row every minute whether or not water moves — that is exactly what makes it able to
-          prove the radio is alive during a flat line. It is also the only one with a hard, always-on
-          prune. At {ref.retention.reception_retention_days || 14} days it settles at a fixed size and
-          stops growing; the long view reads <code>water_hourly</code> instead, which is why history
-          past two weeks costs nothing.
+          <strong>Two tables grow on a timer rather than on usage</strong> — <code>water_packets</code>
+          and <code>water_reception</code>. Both have hard, always-on prunes, which is what keeps
+          the total flat: <code>water_packets</code> settles around 2 MB a day held, and{' '}
+          <code>water_reception</code>{' '}writes a row every minute whether or not water moves — which is exactly what
+          makes it able to prove the radio is alive during a flat line. At{' '}
+          {ref.retention.reception_retention_days || 14} days it settles at a fixed size and stops
+          growing; the long view reads <code>water_hourly</code> instead, which is why history past
+          two weeks costs nothing.
         </p>
         <p className="w-chart-sub small" style={{ marginTop: 6 }}>
           <strong>Do not</strong> set alert retention below the longest cooldown ({dur(20 * 60)}) —

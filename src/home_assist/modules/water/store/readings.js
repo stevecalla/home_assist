@@ -155,6 +155,88 @@ async function daily_series_range(meter_id, days) {
   return out;
 }
 
+/**
+ * Bulk-insert a tick's worth of decoded transmissions.
+ *
+ * ONE statement per tick, not one per packet. At ~15 packets a minute a per-packet round trip is
+ * 15 needless network hops a minute forever, on the process that must never fall behind the radio.
+ *
+ * INSERT IGNORE, because the primary key is (meter_id, heard_at_utc): if two packets from the same
+ * meter land inside the same millisecond, the second is a duplicate of a physical impossibility and
+ * dropping it is more honest than inventing a distinct key for it.
+ */
+async function record_packets(rows) {
+  if (!rows || !rows.length) return 0;
+  const n = now_stamps();
+  const values = rows.map(function (r) {
+    return [
+      r.meter_id, r.heard_at_utc, r.heard_at_mtn, r.is_ours ? 1 : 0,
+      r.volume === undefined ? null : r.volume,
+      r.delta === undefined ? null : r.delta,
+      r.flags_1 === undefined ? null : r.flags_1,
+      r.flags_2 === undefined ? null : r.flags_2,
+      r.integrity === undefined ? null : r.integrity,
+      r.rssi === undefined ? null : r.rssi,
+      r.snr === undefined ? null : r.snr,
+      r.noise === undefined ? null : r.noise,
+      r.freq_mhz === undefined ? null : r.freq_mhz,
+      n.local, n.utc,
+    ];
+  });
+  const res = await db.query(
+    'INSERT IGNORE INTO water_packets ' +
+    '(meter_id, heard_at_utc, heard_at_mtn, is_ours, volume, delta, flags_1, flags_2, integrity, ' +
+    ' rssi, snr, noise, freq_mhz, created_at_mtn, created_at_utc) VALUES ?',
+    [values]
+  );
+  return res && res.affectedRows ? res.affectedRows : 0;
+}
+
+/**
+ * The Real time window. `scope` is 'mine' or 'all' — a DISPLAY filter; capture is decided by the
+ * packets_capture_all_meters setting, not here.
+ *
+ * Returned newest-first from SQL (so LIMIT keeps the RECENT rows, not the oldest ones) and then
+ * reversed, because every chart in this app reads left-to-right in time.
+ */
+async function packet_series(meter_id, hours, scope, limit) {
+  const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
+  const cap = Math.max(1, Math.min(Number(limit) || 5000, 20000));
+  const where = scope === 'all' ? '' : ' AND meter_id = ' + Number(meter_id);
+  const rows = await db.query(
+    'SELECT meter_id, heard_at_utc, heard_at_mtn, is_ours, volume, delta, flags_1, flags_2, ' +
+    '       integrity, rssi, snr, noise, freq_mhz ' +
+    'FROM water_packets ' +
+    'WHERE heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ? SECOND)' + where + ' ' +
+    'ORDER BY heard_at_utc DESC LIMIT ' + cap,
+    [Math.round(h * 3600)]
+  );
+  return rows.reverse();
+}
+
+/** Who else is out there, and how well we hear them. The antenna scoreboard. */
+async function meters_heard(hours) {
+  const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
+  return db.query(
+    'SELECT meter_id, COUNT(*) AS packets, MAX(is_ours) AS is_ours, ' +
+    '       AVG(rssi) AS rssi_avg, AVG(snr) AS snr_avg, ' +
+    '       MIN(heard_at_mtn) AS first_seen, MAX(heard_at_mtn) AS last_seen ' +
+    'FROM water_packets WHERE heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ? SECOND) ' +
+    'GROUP BY meter_id ORDER BY packets DESC',
+    [Math.round(h * 3600)]
+  );
+}
+
+async function prune_packets(days) {
+  const d = Number(days) || 0;
+  if (d <= 0) return 0;
+  try {
+    const cutoff = time.sql_utc(new Date(Date.now() - d * 86400 * 1000));
+    const r = await db.query('DELETE FROM water_packets WHERE heard_at_utc < ? LIMIT 50000', [cutoff]);
+    return r && r.affectedRows ? r.affectedRows : 0;
+  } catch (e) { return 0; }
+}
+
 async function prune_reception(days) {
   const d = Number(days) || 0;
   if (d <= 0) return 0;
@@ -320,5 +402,6 @@ module.exports = {
   insert_reading, bump_hour, save_state, get_state, log_raw,
   prune_raw, prune_readings, prune_alerts, table_sizes,
   record_reception, reception_series, prune_reception, daily_series_range,
+  record_packets, packet_series, meters_heard, prune_packets,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,
 };

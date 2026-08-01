@@ -126,6 +126,21 @@ const DEFS = {
       'YEAR — there is rarely a reason to trim. The hourly rollup that every chart and leak rule ' +
       'reads is never pruned, so trimming this costs you Diagnostics detail and nothing else.',
   },
+  packets_enabled: {
+    type: 'bool', def: 1, group: 'Data',
+    label: 'Record every transmission',
+    help: 'Writes one row per decoded packet to water_packets -- the Real time tab. Off = the tab hides and nothing is written.',
+  },
+  packets_capture_all_meters: {
+    type: 'bool', def: 1, group: 'Data',
+    label: 'Include neighbouring meters',
+    help: 'Neighbours are captured for antenna comparison only. They never advance your odometer, enter a rule, or raise an alert. Off = only your meter is stored.',
+  },
+  packets_retention_days: {
+    type: 'int', def: 1, group: 'Data', min: 1, max: 7,
+    label: 'Keep transmissions for (days)',
+    help: 'About 2 MB per day for your meter alone, or 6 MB with two neighbours in range. Pruned hourly, so the size is set by this number and not by usage.',
+  },
   reception_retention_days: {
     type: 'int', def: 14, group: 'Retention', min: 0,
     label: 'Keep the reception log for (days)',

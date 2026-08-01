@@ -82,10 +82,15 @@ const SHORT = {
     "Tunable thresholds, editable from the Settings page. DB row > .env > built-in default. Not cleared by water_reset.",
   water_raw_samples:
     "Rolling buffer of raw rtl_433 lines for decoder field-name forensics. A diagnostic buffer, not an archive -- pruned hourly.",
+  water_packets:
+    "Every decoded transmission, one row each, every meter in range -- the granular near-real-time view. Neighbours are captured for antenna work and never counted. Bounded by a short prune.",
 };
 
 const PURPOSE_RECEPTION =
   'Per-minute reception log: how many packets the radio decoded, how many were OURS, and how strong they were. One row per minute for as long as the collector runs. This is the table to look at to answer "is it hearing my meter right now?" -- water_raw_samples cannot answer it, because that one stops after a fixed number of packets per run on purpose. A gap in this table is the real signal that reception was lost.';
+
+const PURPOSE_PACKETS =
+  'Every Badger Orion transmission the decoder resolved -- ours and the neighbours -- one row each, at whole-second precision with the signal figures from -M level. This is the granular, near-real-time view: what the radio actually received, before any aggregation. Rows for other meters are captured for antenna work ONLY; they never advance an odometer, never enter a leak rule and never raise an alert. Bounded by packets_retention_days (default 1), so its size is set by the clock and not by how much water you use.';
 
 const TABLES = [
   {
@@ -242,6 +247,39 @@ const TABLES = [
      KEY idx_minute (minute_utc)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
+  {
+    name: 'water_packets',
+    short: SHORT.water_packets,
+    purpose_after: 'heard_at_utc',
+    purpose: PURPOSE_PACKETS,
+    // InnoDB, not ENGINE=MEMORY. MEMORY would save the ~2 MB this table settles at and cost three
+    // things: the rows vanish on a MySQL restart, the table is silently capped by the server's
+    // max_heap_table_size (16 MB by default, which a longer retention would walk straight into),
+    // and it becomes the one table in this schema that behaves differently from all the others.
+    // A hard prune already bounds the size; the disk is not the scarce resource here.
+    //
+    // DATETIME(3) because the point of this table is sub-second ordering. At ~4 seconds between
+    // transmissions, whole-second stamps would collide often enough to make "what arrived first"
+    // unanswerable -- which is the one question it exists to answer.
+    ddl: `CREATE TABLE IF NOT EXISTS water_packets (
+     meter_id     BIGINT UNSIGNED NOT NULL,
+     heard_at_utc DATETIME(3)     NOT NULL COMMENT 'when the SDR decoded it, to the millisecond',
+     purpose ${PURPOSE_COL}'${SHORT.water_packets}',
+     heard_at_mtn DATETIME(3)     NOT NULL,
+     is_ours      TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = WATER_METER_ID; 0 = a neighbour, captured but never counted',
+     volume       DECIMAL(14,2)   NULL COMMENT 'the odometer as transmitted, before gallons_per_unit',
+     delta        DECIMAL(14,2)   NULL COMMENT 'change from this meter previous packet; NULL = first seen',
+     flags_1      INT             NULL,
+     flags_2      INT             NULL,
+     integrity    VARCHAR(16)     NULL COMMENT 'CRC / CHECKSUM as reported by the decoder',
+     rssi         DECIMAL(6,2)    NULL COMMENT 'needs -M level in WATER_RTL433_ARGS; NULL otherwise',
+     snr          DECIMAL(6,2)    NULL,
+     noise        DECIMAL(6,2)    NULL,
+     freq_mhz     DECIMAL(10,4)   NULL,${CREATED_AT},
+     PRIMARY KEY (meter_id, heard_at_utc),
+     KEY idx_heard (heard_at_utc)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  },
 ];
 
 /**
@@ -257,6 +295,9 @@ const ADDED_COLUMNS = [
   ['water_alerts', 'purpose', purpose_def(SHORT.water_alerts, 'id')],
   ['water_collector_state', 'purpose', purpose_def(SHORT.water_collector_state, 'meter_id')],
   ['water_settings', 'purpose', purpose_def(SHORT.water_settings, 'name')],
+  ['water_packets', 'purpose', purpose_def(SHORT.water_packets, 'heard_at_utc')],
+  ['water_packets', 'created_at_mtn', 'DATETIME NULL'],
+  ['water_packets', 'created_at_utc', 'DATETIME NULL'],
   ['water_raw_samples', 'purpose', purpose_def(SHORT.water_raw_samples, 'id')],
   ['water_readings', 'created_at_mtn', CREATED_MTN],
   ['water_readings', 'created_at_utc', CREATED_UTC],
@@ -406,6 +447,7 @@ const BACKFILL = [
   ['water_collector_state', 'created_at_utc', 'created_at_mtn', 'COALESCE(started_at_utc, last_heartbeat_utc)', null],
   ['water_settings', 'created_at_utc', 'created_at_mtn', 'updated_at_utc', 'updated_at_mtn'],
   ['water_settings', 'updated_at_utc', 'updated_at_mtn', null, null],
+  ['water_packets', 'created_at_utc', 'created_at_mtn', 'heard_at_utc', 'heard_at_mtn'],
   ['water_raw_samples', 'created_at_utc', 'created_at_mtn', 'seen_at_utc', 'seen_at_mtn'],
   ['water_raw_samples', 'seen_at_utc', 'seen_at_mtn', null, null],
 ];

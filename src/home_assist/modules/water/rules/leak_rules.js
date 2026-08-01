@@ -452,7 +452,132 @@ function run_spans(readings, cfg) {
   });
 }
 
+
+/**
+ * Signal quality, expressed in bands rather than raw dB.
+ *
+ * "-9.4 dBm" is not actionable to anyone who has not read an SDR datasheet. "strong" is. The bands
+ * live here — a pure module with no DB and no clock — so the badge in the table, any future alert
+ * on degrading reception, and the Reference page all read the SAME numbers. Three places deciding
+ * independently what "weak" means is how a dashboard starts contradicting itself.
+ *
+ * The thresholds are for a Badger Orion at 916.45 MHz through an RTL-SDR, and they are chosen from
+ * where DECODING actually fails, not from a general RF convention:
+ *
+ *   SNR is the one that predicts packet loss. Below about 10 dB the decoder starts dropping
+ *   packets, which is the gap you see in the pulse. Above ~18 dB the link has margin for weather,
+ *   a closed door, and a neighbour's new baby monitor.
+ *
+ *   RSSI is raw power and is the less useful of the two on its own: a strong signal buried in
+ *   strong noise still fails. It is here because it separates "the meter is far away" from "the
+ *   band got noisy" when read alongside `noise`.
+ */
+const SIGNAL_QUALITY = {
+  snr: {
+    unit: 'dB',
+    bands: [
+      { level: 'strong', min: 18, label: 'Strong', note: 'comfortable margin -- weather and a closed door will not cost you packets' },
+      { level: 'ok', min: 12, label: 'OK', note: 'decodes reliably, but little margin left' },
+      { level: 'weak', min: 8, label: 'Weak', note: 'packets start dropping here -- this is where gaps come from' },
+      { level: 'poor', min: null, label: 'Poor', note: 'mostly luck; move the antenna' },
+    ],
+  },
+  rssi: {
+    unit: 'dBm',
+    bands: [
+      { level: 'strong', min: -12, label: 'Strong', note: 'plenty of power at the dongle' },
+      { level: 'ok', min: -18, label: 'OK', note: 'workable' },
+      { level: 'weak', min: -24, label: 'Weak', note: 'far, or through too much wall' },
+      { level: 'poor', min: null, label: 'Poor', note: 'at the edge of the receiver sensitivity' },
+    ],
+  },
+};
+
+/** Which band a value falls in. Returns the band object, or null when there is no reading. */
+function signal_band(kind, value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  const spec = SIGNAL_QUALITY[kind];
+  if (!spec) return null;
+  const v = Number(value);
+  for (const b of spec.bands) {
+    if (b.min === null || v >= b.min) return b;
+  }
+  return spec.bands[spec.bands.length - 1];
+}
+
+/**
+ * The typical seconds between transmissions, measured from the packets themselves.
+ *
+ * MEDIAN, not mean: one 40-second dropout would drag a mean up enough that the gap detector below
+ * would stop calling anything a gap — the outliers would define "normal". The median is unmoved by
+ * the very events we are trying to find.
+ */
+function median_interval(packets) {
+  if (!packets || packets.length < 3) return 4;
+  const gaps = [];
+  for (let i = 1; i < packets.length; i++) {
+    const a = new Date(packets[i - 1].heard_at_utc).getTime();
+    const b = new Date(packets[i].heard_at_utc).getTime();
+    if (b > a) gaps.push((b - a) / 1000);
+  }
+  if (!gaps.length) return 4;
+  gaps.sort(function (x, y) { return x - y; });
+  const m = gaps[Math.floor(gaps.length / 2)];
+  return Math.max(0.5, Math.round(m * 10) / 10);
+}
+
+/**
+ * Silences worth naming.
+ *
+ * A gap is any interval longer than `factor` times the normal spacing. The threshold is relative
+ * rather than absolute so it holds if the endpoint's transmit interval is not what we assumed —
+ * which is the whole reason median_interval measures instead of hardcoding.
+ *
+ * `snr_before` / `snr_after` are carried because they turn a gap from an observation into a
+ * diagnosis: signal collapsing across a gap is a path problem (something moved, something got wet);
+ * signal unchanged across a gap is interference or a receiver stall.
+ */
+function gap_spans(packets, interval_seconds, factor) {
+  const step = Number(interval_seconds) || 4;
+  const mult = Number(factor) || 3;
+  const threshold = step * mult;
+  const out = [];
+  if (!packets || packets.length < 2) return out;
+  for (let i = 1; i < packets.length; i++) {
+    const prev = packets[i - 1];
+    const cur = packets[i];
+    const a = new Date(prev.heard_at_utc).getTime();
+    const b = new Date(cur.heard_at_utc).getTime();
+    const secs = (b - a) / 1000;
+    if (secs <= threshold) continue;
+    out.push({
+      start: prev.heard_at_utc,
+      end: cur.heard_at_utc,
+      start_mtn: prev.heard_at_mtn || null,
+      seconds: Math.round(secs * 10) / 10,
+      missed: Math.max(1, Math.round(secs / step) - 1),
+      snr_before: prev.snr === undefined ? null : prev.snr,
+      snr_after: cur.snr === undefined ? null : cur.snr,
+    });
+  }
+  return out;
+}
+
+/**
+ * Decode rate over a window: heard vs how many should have arrived.
+ *
+ * The denominator comes from the window length and the measured interval, so this reports what the
+ * ANTENNA achieved rather than what the database happens to contain.
+ */
+function decode_rate(packets, interval_seconds, window_seconds) {
+  const step = Number(interval_seconds) || 4;
+  const heard = packets ? packets.length : 0;
+  const expected = Math.max(heard, Math.round((Number(window_seconds) || 0) / step));
+  return { heard: heard, expected: expected, pct: expected ? (heard / expected) * 100 : 0 };
+}
+
 module.exports = {
+  SIGNAL_QUALITY, signal_band, median_interval, gap_spans, decode_rate,
   sum_hours, overnight_keys,
   check_overnight, check_continuous, check_watchdog, daily_summary, current_run, run_spans,
   evaluate, status, ALERT_CATALOG,

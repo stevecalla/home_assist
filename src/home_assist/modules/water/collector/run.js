@@ -30,6 +30,13 @@ const mailer = require('../../../notify/mailer');
 const { create_limiter } = require('../../../rate_limit');
 
 const TICK_MS = 60 * 1000;
+// A decoder field that is present but not a number (or absent entirely) must become NULL, not 0 —
+// "the radio did not report this" and "the radio reported zero" are different facts, and -M level
+// being off is exactly the case that produces the first one.
+function num_or_null(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
 const RAW_SAMPLE_LIMIT = 20;      // log this many raw lines on startup to confirm field names
 
 // Rejected packets are logged for diagnosis, but the logging must not scale with how badly things
@@ -89,6 +96,15 @@ async function create_collector(options) {
   // PERSISTENT record of what the radio heard — the thing water_raw_samples deliberately is not.
   let rx_total = 0, rx_ours = 0;
   let rssi_sum = 0, rssi_n = 0, rssi_best = null, snr_sum = 0, snr_n = 0;
+
+  // Every decoded transmission this tick, flushed as ONE insert. Not one round-trip per packet:
+  // at ~15 packets a minute that would be 15 needless network hops a minute, forever, on the
+  // process that must never fall behind the radio.
+  //
+  // `last_volume` is per METER, so `delta` is meaningful for a neighbour's endpoint too — which is
+  // what makes their trace usable as a reference signal rather than a flat line of raw counts.
+  let packet_buf = [];
+  const last_volume = new Map();
   let pkt_ours = 0;       // ...that came from our meter id
   let gal_since = 0;      // gallons credited since the last report
 
@@ -149,7 +165,37 @@ async function create_collector(options) {
       ids_seen.set(reading.id, (ids_seen.get(reading.id) || 0) + 1);
     }
 
-    if (!ingest.is_our_meter(reading, cfg.meter_id)) return;   // a neighbour's endpoint
+    // ── the granular record ────────────────────────────────────────────────────────────────
+    // Buffered BEFORE the meter filter below, so a neighbour's endpoint is captured. Capture and
+    // COUNTING are different things and this is the line between them: everything past this point
+    // is our meter only. A neighbour can never advance the odometer, enter a leak rule, or raise an
+    // alert — it exists here so that "did moving the antenna help?" has a control to compare
+    // against, which one meter alone cannot provide.
+    const ours_now = ingest.is_our_meter(reading, cfg.meter_id);
+    if (cfg.packets_enabled && (ours_now || cfg.packets_capture_all_meters)) {
+      const pid = reading.id === null || reading.id === undefined ? cfg.meter_id : reading.id;
+      const vol = reading.raw;
+      const prev = last_volume.get(pid);
+      last_volume.set(pid, vol);
+      const st = time.stamps(new Date());
+      packet_buf.push({
+        meter_id: pid,
+        heard_at_utc: st.utc_ms || st.utc,
+        heard_at_mtn: st.local_ms || st.local,
+        is_ours: ours_now,
+        volume: vol,
+        delta: prev === undefined ? null : Number((vol - prev).toFixed(2)),
+        flags_1: num_or_null(msg['Flags-1'] !== undefined ? msg['Flags-1'] : msg.flags_1),
+        flags_2: num_or_null(msg['Flags-2'] !== undefined ? msg['Flags-2'] : msg.flags_2),
+        integrity: msg.Integrity === undefined ? null : String(msg.Integrity).slice(0, 16),
+        rssi: num_or_null(msg.rssi),
+        snr: num_or_null(msg.snr),
+        noise: num_or_null(msg.noise),
+        freq_mhz: num_or_null(msg.freq),
+      });
+    }
+
+    if (!ours_now) return;   // a neighbour's endpoint — captured above, never counted
     pkt_ours++;
     rx_ours++;
 
@@ -237,6 +283,15 @@ async function create_collector(options) {
       // Persist what the radio heard this minute BEFORE anything else in the tick can fail. This
       // is the record you go looking for when the dashboard is empty and you need to know whether
       // the radio was the problem — so it must survive a bad hour, not depend on one.
+      // Flush the packet buffer first. Best-effort like every other diagnostic: a failure here
+      // must never stop the reception row or the leak rules that follow it.
+      if (packet_buf.length) {
+        const batch = packet_buf;
+        packet_buf = [];
+        try { await readings.record_packets(batch); }
+        catch (e) { console.error('packet flush failed: ' + e.message); }
+      }
+
       await readings.record_reception(meter_id, now, {
         packets_total: rx_total,
         packets_ours: rx_ours,
@@ -298,9 +353,10 @@ async function create_collector(options) {
     const old_readings = await readings.prune_readings(cfg.readings_retention_days);
     const old_alerts = await readings.prune_alerts(cfg.alerts_retention_days);
     const old_rx = await readings.prune_reception(cfg.reception_retention_days);
-    if (raw || old_readings || old_alerts || old_rx) {
+    const old_pk = await readings.prune_packets(cfg.packets_retention_days);
+    if (raw || old_readings || old_alerts || old_rx || old_pk) {
       log('retention sweep: removed ' + raw + ' raw, ' + old_readings + ' readings, ' +
-        old_alerts + ' alerts, ' + old_rx + ' reception rows');
+        old_alerts + ' alerts, ' + old_rx + ' reception rows, ' + old_pk + ' packets');
     }
   }
 

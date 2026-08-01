@@ -91,9 +91,21 @@ function sql_local(date, tz) {
 }
 
 // Both stamps for one moment — the shape every insert wants.
+//
+// `utc_ms` / `local_ms` carry milliseconds, for DATETIME(3) columns. water_packets needs them:
+// transmissions arrive about every four seconds, and whole-second stamps collide often enough that
+// "which packet came first" — the one question that table exists to answer — becomes unanswerable.
+// MySQL truncates the fractional part when the column is a plain DATETIME, so the same string is
+// safe to pass to either.
 function stamps(date, tz) {
   const d = date instanceof Date ? date : new Date(date);
-  return { utc: sql_utc(d), local: sql_local(d, tz) };
+  const ms = '.' + String(d.getUTCMilliseconds()).padStart(3, '0');
+  return {
+    utc: sql_utc(d),
+    local: sql_local(d, tz),
+    utc_ms: sql_utc(d) + ms,
+    local_ms: sql_local(d, tz) + ms,
+  };
 }
 
 // 'YYYY-MM-DDTHH' -> 'YYYY-MM-DD HH:00:00' (the local hour start, for the rollup row).

@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import BarChart from './BarChart.jsx';
 import HeartbeatChart from './HeartbeatChart.jsx';
+import RealtimeChart from './RealtimeChart.jsx';
+import DataGrid from '../../components/DataGrid.jsx';
 import CollapsibleCard from '../../components/CollapsibleCard.jsx';
 import CardTools from '../../components/CardTools.jsx';
 import SqlPanel from './SqlPanel.jsx';
@@ -37,6 +39,26 @@ const RUN = {
 
 const HOUR_CHIPS = [1, 6, 24, 72];
 const DAY_CHIPS = [7, 30, 90, 365];
+// Minutes, for the Real time tab. 15 minutes is about 225 transmissions — enough to see the shape
+// of the last few gallons without the packet lane becoming a solid block.
+const RT_CHIPS = [{ m: 15, label: '15m' }, { m: 60, label: '1h' }, { m: 360, label: '6h' }, { m: 1440, label: '24h' }];
+const RT_MS = 6000;         // the packets poll: fast enough to feel live, slow enough to be cheap
+
+const MODE_TITLE = {
+  realtime: 'Water — every transmission',
+  heartbeat: 'Water — meter heartbeat',
+  long: 'Water — daily totals',
+};
+
+// Signal bands come from the API (rules.SIGNAL_QUALITY) so the badge here and any future alert on
+// reception quality can never disagree about what "weak" means.
+function band_of(quality, kind, value) {
+  if (value === null || value === undefined || !quality || !quality[kind]) return null;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return null;
+  for (const b of quality[kind].bands) if (b.min === null || v >= b.min) return b;
+  return null;
+}
 
 function fmtDur(min) {
   const m = Math.max(0, Math.round(min));
@@ -51,6 +73,9 @@ export default function Monitor() {
   const [hourly, setHourly] = useState(null);
   const [alerts, setAlerts] = useState(null);
   const [meter, setMeter] = useState(null);
+  const [rt, setRt] = useState(null);
+  const [rtMin, setRtMin] = useState(15);
+  const [rtScope, setRtScope] = useState('mine');
   const [tail, setTail] = useState([]);
   // A 1-second tick, used only to age the "last packet" counter. The data poll stays at 5s — this
   // is about the DISPLAY being visibly alive, not about asking the server more often.
@@ -79,6 +104,7 @@ export default function Monitor() {
   const [force, setForce] = useState({ open: undefined, key: 0 });
   const forceAll = (open) => setForce((f) => ({ open, key: f.key + 1 }));
 
+  const rtRef = useRef(null);
   const hbRef = useRef(null);
   const longRef = useRef(null);
   const hourlyRef = useRef(null);
@@ -118,7 +144,14 @@ export default function Monitor() {
     } else setErr(s.body.error || 'Could not load status');
   }, []);
 
+  const loadRealtime = useCallback(async () => {
+    if (mode !== 'realtime') return;
+    const r = await api.waterPackets({ hours: (rtMin / 60).toFixed(4), meter: rtScope, limit: 6000 });
+    if (r.status === 200 && r.body.ok) setRt(r.body);
+  }, [mode, rtMin, rtScope]);
+
   const loadSeries = useCallback(async () => {
+    if (mode === 'realtime') return;
     const q = mode === 'long' ? { mode: 'long', days } : { mode: 'heartbeat', hours };
     const m = await api.waterMeter(q);
     if (m.status === 200 && m.body.ok) setMeter(m.body);
@@ -149,6 +182,12 @@ export default function Monitor() {
     const id = setInterval(loadSeries, SERIES_MS);
     return () => clearInterval(id);
   }, [loadSeries]);
+
+  useEffect(() => {
+    loadRealtime();
+    const id = setInterval(loadRealtime, RT_MS);
+    return () => clearInterval(id);
+  }, [loadRealtime]);
 
   if (err && !status) return <div className="page"><p className="err">{err}</p></div>;
   if (!status) return <div className="loading">Loading…</div>;
@@ -196,6 +235,30 @@ export default function Monitor() {
   const hbRows = hb ? hb.series.map((p) => [p.minute_mtn, p.odometer, p.packets, p.rssi, p.snr]) : [];
   const lvHeaders = ['day_key', 'gallons', 'observed'];
   const lvRows = lv ? lv.series.map((d) => [d.day_key, d.gallons.toFixed(1), d.observed ? 'yes' : 'no']) : [];
+
+  // ── the Real time tab ──────────────────────────────────────────────────────────────────────
+  const rtCols = rt && rt.columns ? rt.columns : [];
+  const rtPackets = rt ? rt.packets : [];
+  const rtMine = rtPackets.filter((p) => p.is_ours);
+  const rtGrid = rtPackets.slice().reverse().map((p, i) => ({
+    ...p,
+    _key: p.meter_id + '|' + p.heard_at_utc + '|' + i,
+    _highlight: p.is_ours,
+    _dim: !p.is_ours,
+  }));
+  const rtHeaders = rtCols.map((c) => c.key);
+  const rtRows = rtGrid.map((r) => rtCols.map((c) => r[c.key]));
+  const rtSecs = Math.max(1, rtMin * 60);
+  const rtExpected = rt && rt.interval_seconds ? Math.round(rtSecs / rt.interval_seconds) : 0;
+  const rtDecodePct = rtExpected ? Math.min(100, (rtMine.length / rtExpected) * 100) : null;
+  const rtLastSnr = (() => {
+    const withSnr = rtMine.filter((p) => p.snr !== null && p.snr !== undefined).slice(-20);
+    return withSnr.length ? withSnr.reduce((a, p) => a + p.snr, 0) / withSnr.length : null;
+  })();
+  const rtSnrBand = band_of(rt && rt.quality, 'snr', rtLastSnr);
+
+  const exportHeaders = mode === 'long' ? lvHeaders : mode === 'realtime' ? rtHeaders : hbHeaders;
+  const exportRows = mode === 'long' ? lvRows : mode === 'realtime' ? rtRows : hbRows;
 
   const commit = (text, setVal, setText, max) => {
     const n = Math.max(1, Math.min(Math.round(Number(text)) || 1, max));
@@ -292,15 +355,16 @@ export default function Monitor() {
         actions={
           <>
             <span className="w-seg">
+              <button type="button" className={mode === 'realtime' ? 'on' : ''} onClick={() => setMode('realtime')}>Real time</button>
               <button type="button" className={mode === 'heartbeat' ? 'on' : ''} onClick={() => setMode('heartbeat')}>Heartbeat</button>
               <button type="button" className={mode === 'long' ? 'on' : ''} onClick={() => setMode('long')}>Long view</button>
             </span>
             <CardTools
-              id={mode === 'long' ? 'water-long' : 'water-heartbeat'}
-              title={mode === 'long' ? 'Water — daily totals' : 'Water — meter heartbeat'}
-              svgRef={mode === 'long' ? longRef : hbRef}
-              headers={mode === 'long' ? lvHeaders : hbHeaders}
-              rows={mode === 'long' ? lvRows : hbRows}
+              id={'water-' + mode}
+              title={MODE_TITLE[mode]}
+              svgRef={mode === 'long' ? longRef : mode === 'realtime' ? rtRef : hbRef}
+              headers={exportHeaders}
+              rows={exportRows}
               flip={flipMeter}
               onFlip={setFlipMeter}
             />
@@ -309,7 +373,29 @@ export default function Monitor() {
       >
         <div className="w-rangebar">
           <span className="w-range-label">{status.tz.split('/')[1].replace('_', ' ')} time</span>
-          {(mode === 'long' ? DAY_CHIPS : HOUR_CHIPS).map((n) => (
+          {mode === 'realtime' ? (
+            <>
+              {RT_CHIPS.filter((c) => !rt || c.m <= rt.max_hours * 60).map((c) => (
+                <button key={c.m} type="button"
+                        className={'w-chip' + (rtMin === c.m ? ' on' : '')}
+                        onClick={() => setRtMin(c.m)}>{c.label}</button>
+              ))}
+              {/* A display filter. What gets CAPTURED is packets_capture_all_meters in Settings —
+                  flipping this never changes what is stored. */}
+              <span className="w-filt">
+                <button type="button" className={rtScope === 'mine' ? 'on' : ''} onClick={() => setRtScope('mine')}>This meter</button>
+                <button type="button" className={rtScope === 'all' ? 'on' : ''} onClick={() => setRtScope('all')}>All meters</button>
+              </span>
+              {rt ? (
+                <span className="w-mem">
+                  keeping <b>{rt.retention_days} day{rt.retention_days === 1 ? '' : 's'}</b> ·{' '}
+                  {rtPackets.length.toLocaleString()} rows here ·{' '}
+                  <Link to="/water/settings">change</Link>
+                </span>
+              ) : null}
+            </>
+          ) : null}
+          {mode !== 'realtime' ? (mode === 'long' ? DAY_CHIPS : HOUR_CHIPS).map((n) => (
             <button
               key={n}
               type="button"
@@ -320,8 +406,8 @@ export default function Monitor() {
             >
               {n}{mode === 'long' ? 'd' : 'h'}
             </button>
-          ))}
-          <input
+          )) : null}
+          {mode !== 'realtime' ? <input
             className="w-numin"
             value={mode === 'long' ? daysText : hoursText}
             onChange={(e) => (mode === 'long' ? setDaysText(e.target.value) : setHoursText(e.target.value))}
@@ -330,8 +416,8 @@ export default function Monitor() {
               : commit(hoursText, setHours, setHoursText, (hb && hb.max_hours) || 72))}
             onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
             aria-label={mode === 'long' ? 'days' : 'hours'}
-          />
-          <span className="w-range-label">{mode === 'long' ? 'days' : 'h'}</span>
+          /> : null}
+          {mode !== 'realtime' ? <span className="w-range-label">{mode === 'long' ? 'days' : 'h'}</span> : null}
           {mode === 'heartbeat' ? (
             <span className="w-range-note">max {(hb && hb.max_hours) || 72}h — per-minute rows stop being readable past that</span>
           ) : null}
@@ -373,7 +459,45 @@ export default function Monitor() {
             </div>
             <div className="w-readout-lab">meter reading now</div>
           </div>
-          {mode === 'heartbeat' ? (
+          {mode === 'realtime' ? (
+            <>
+              <div>
+                <div className={'w-readout-sm w-since ' + sinceClass(secsSince)} key={beat}>
+                  {secsSince === null ? '—' : secsSince + 's'}
+                </div>
+                <div className="w-readout-lab">since last packet</div>
+              </div>
+              <div>
+                <div className="w-readout-sm">{rtMine.length.toLocaleString()}</div>
+                <div className="w-readout-lab">transmissions shown</div>
+              </div>
+              <div>
+                <div className="w-readout-sm">{rt && rt.interval_seconds ? rt.interval_seconds + 's' : '—'}</div>
+                <div className="w-readout-lab">measured interval</div>
+              </div>
+              <div>
+                <div className={'w-readout-sm ' + (rtDecodePct !== null && rtDecodePct < 90 ? 'w-since warn' : 'w-since good')}>
+                  {rtDecodePct === null ? '—' : rtDecodePct.toFixed(1) + ' %'}
+                </div>
+                <div className="w-readout-lab">decoded</div>
+              </div>
+              <div>
+                {/* The badge, not the bare number. "20.6 dB" means nothing without a scale. */}
+                <div className={'w-readout-sm w-sig ' + (rtSnrBand ? rtSnrBand.level : '')}
+                     title={rtSnrBand ? rtSnrBand.label + ' — ' + rtSnrBand.note : ''}>
+                  {rtLastSnr === null ? '—' : rtLastSnr.toFixed(1) + ' dB'}
+                  {rtSnrBand ? <span className="w-sig-tag">{rtSnrBand.label}</span> : null}
+                </div>
+                <div className="w-readout-lab">signal (snr)</div>
+              </div>
+              <div>
+                <div className="w-readout-sm" style={{ color: rt && rt.gaps && rt.gaps.length ? 'var(--w-critical)' : undefined }}>
+                  {rt && rt.gaps ? rt.gaps.length : 0}
+                </div>
+                <div className="w-readout-lab">gaps</div>
+              </div>
+            </>
+          ) : mode === 'heartbeat' ? (
             <>
               {/* The proof-of-life counter. It counts up every second and snaps back to 0 each time
                   a packet lands — roughly every 4 seconds when the radio is healthy. Nothing else
@@ -413,7 +537,103 @@ export default function Monitor() {
           ) : null}
         </div>
 
-        {flipMeter ? (
+        {mode === 'realtime' ? (
+          flipMeter ? (
+            <>
+              <DataGrid
+                columns={rtCols}
+                rows={rtGrid}
+                initialSort={null}
+                filterPlaceholder="Filter — try a meter id, CRC, or a volume"
+                renderCell={renderPacketCell(rt && rt.quality, status.meter_id)}
+                emptyMessage={rt && !rt.enabled
+                  ? 'Recording is off. Turn on "Record every transmission" in Settings.'
+                  : 'Waiting for the first transmission…'}
+                maxHeight={420}
+              />
+              <p className="w-chart-sub small" style={{ marginTop: 8 }}>
+                Newest first. <b>Hover any column heading</b> for what it means and what a good value
+                looks like. A blank <code>delta</code> is the normal case — the meter re-broadcasts
+                the same total every few seconds and only steps when a whole gallon has passed.
+              </p>
+            </>
+          ) : (
+            <>
+              <div ref={rtRef}>
+                <RealtimeChart
+                  packets={rtMine}
+                  gaps={rt ? rt.gaps : []}
+                  tz={status.tz}
+                  height={280}
+                  emptyMessage={rt && !rt.enabled
+                    ? 'Recording is off. Turn on "Record every transmission" in Settings.'
+                    : 'Waiting for the first transmission…'}
+                />
+              </div>
+              <div className="w-legend-note">
+                <span><span className="w-swatch series" /><b>Reading</b> — steps at the exact second the meter ticked</span>
+                <span><span className="w-swatch serious" /><b>SNR</b> — per packet; below the dashed line is where packets drop</span>
+                <span><span className="w-swatch good" /><b>Packets</b> — one tick each</span>
+                <span><span className="w-swatch critical" /><b>Gap</b> — nothing decoded</span>
+              </div>
+              {rt && rt.gaps && rt.gaps.length ? (
+                <>
+                  <p className="w-chart-sub" style={{ marginTop: 10, fontWeight: 700 }}>Gaps in this window</p>
+                  <table className="w-table">
+                    <thead><tr><th>started</th><th>length</th><th>missed</th><th>snr before</th><th>snr after</th><th>reading</th></tr></thead>
+                    <tbody>
+                      {rt.gaps.slice(-8).reverse().map((g, i) => (
+                        <tr key={i}>
+                          <td>{String(g.start_mtn || '').slice(11, 23) || '—'}</td>
+                          <td style={{ color: 'var(--w-critical)', fontWeight: 700 }}>{g.seconds}s</td>
+                          <td>{g.missed}</td>
+                          <td>{g.snr_before === null ? '—' : g.snr_before + ' dB'}</td>
+                          <td>{g.snr_after === null ? '—' : g.snr_after + ' dB'}</td>
+                          {/* The diagnosis, not just the observation. */}
+                          <td className="muted small">
+                            {g.snr_before !== null && g.snr_after !== null && g.snr_before - g.snr_after > 5
+                              ? 'signal collapsed — an RF path problem'
+                              : 'signal held — interference or a receiver stall'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : null}
+              {rt && rt.meters && rt.meters.length > 1 ? (
+                <>
+                  <p className="w-chart-sub" style={{ marginTop: 10, fontWeight: 700 }}>Meters heard</p>
+                  <table className="w-table">
+                    <thead><tr><th>id</th><th></th><th>packets</th><th>decoded</th><th>rssi avg</th><th>snr avg</th><th>last seen</th></tr></thead>
+                    <tbody>
+                      {rt.meters.map((m) => {
+                        const pct = rtExpected ? Math.min(100, (m.packets / rtExpected) * 100) : null;
+                        const bd = band_of(rt.quality, 'snr', m.snr_avg);
+                        return (
+                          <tr key={m.meter_id} className={m.is_ours ? 'is-mine' : 'is-other'}>
+                            <td>{m.meter_id}</td>
+                            <td><span className={'w-pill ' + (m.is_ours ? 'sent' : 'failed')}>{m.is_ours ? 'mine' : 'other'}</span></td>
+                            <td>{m.packets.toLocaleString()}</td>
+                            <td>{pct === null ? '—' : pct.toFixed(1) + ' %'}</td>
+                            <td>{m.rssi_avg === null ? '—' : m.rssi_avg}</td>
+                            <td>{m.snr_avg === null ? '—' : <span className={'w-sig ' + (bd ? bd.level : '')}>{m.snr_avg} dB</span>}</td>
+                            <td className="muted small">{String(m.last_seen || '').slice(11, 19)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="muted small" style={{ marginTop: 6 }}>
+                    Neighbouring meters are captured for antenna comparison only — they never advance
+                    your odometer, enter a rule, or raise an alert. If a move raises your SNR and not
+                    theirs, you improved <em>your</em> path; if it raises both, you improved the receiver.
+                  </p>
+                </>
+              ) : null}
+            </>
+          )
+        ) : flipMeter ? (
           <DataTable
             headers={mode === 'long' ? lvHeaders : hbHeaders}
             rows={mode === 'long' ? lvRows : hbRows}
@@ -584,6 +804,54 @@ export default function Monitor() {
 
 // The rows behind a chart. Scrollable and newest-last, so the bottom of the box is "now" — the same
 // direction the chart reads, which is what makes the two comparable at a glance.
+/**
+ * How a packet cell is drawn.
+ *
+ * Two jobs beyond formatting. First, the signal columns get a BADGE, not a bare number: "-9.4" and
+ * "20.6" are meaningless without a scale, and the scale lives on the server so the badge here and
+ * any future reception alert can never disagree. Second, a NULL is drawn as an em dash and never as
+ * a zero — with -M level off, every signal column is null, and rendering that as 0 dB would send
+ * someone up a ladder to fix an antenna that is fine.
+ */
+function renderPacketCell(quality, myMeter) {
+  return function cell(col, value, row) {
+    if (value === null || value === undefined || value === '') {
+      return <span className="muted">—</span>;
+    }
+    switch (col.type) {
+      case 'time':
+        // Already local (MTN) from the server — MySQL's heard_at_mtn column, not a browser clock.
+        return <span className="w-mono">{String(value).slice(11, 23)}</span>;
+      case 'id':
+        return (
+          <span className={Number(value) === Number(myMeter) ? 'w-id-mine' : 'w-id-other'}>
+            {value}{Number(value) === Number(myMeter) ? <span className="w-pill sent">mine</span> : null}
+          </span>
+        );
+      case 'num':
+        return Number(value).toLocaleString();
+      case 'delta': {
+        const n = Number(value);
+        if (!n) return <span className="muted">—</span>;
+        return <span style={{ color: 'var(--w-series)', fontWeight: 700 }}>{n > 0 ? '+' : ''}{n}</span>;
+      }
+      case 'freq':
+        return Number(value).toFixed(4);
+      case 'rssi':
+      case 'snr': {
+        const b = band_of(quality, col.type, value);
+        return (
+          <span className={'w-sig ' + (b ? b.level : '')} title={b ? b.label + ' — ' + b.note : ''}>
+            {value}{b ? <span className="w-sig-tag">{b.label}</span> : null}
+          </span>
+        );
+      }
+      default:
+        return String(value);
+    }
+  };
+}
+
 function DataTable({ headers, rows, note }) {
   const body = (rows || []).slice(-500);
   return (
