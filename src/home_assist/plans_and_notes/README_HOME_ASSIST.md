@@ -199,7 +199,7 @@ Built and verified end to end against a live MySQL and a replayed meter:
 
 - **103/103 unit tests pass** — password hashing, `.env` recovery login, add/remove/validate users,
   session sign/verify + tamper + expiry rejection, the module-driven panel catalog, the
-  default/per-user/admin access model, all three leak rules, the ingest sanity guards, and the
+  default/per-user/admin access model, all four leak rules, the ingest sanity guards, and the
   local-time hour-key layer, the diagnostic rate limiter, and the SMTP deadline wrapper.
 - **43/43 server files parse cleanly** (`node --check`).
 - Collector ingests through the real path (rtl_433 JSON → guards → `water_readings` +

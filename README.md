@@ -306,21 +306,33 @@ variants name our two processes explicitly, so they can never take down your oth
 rtl_433 -f 916.45M -s 1600k -R 223 -F json
 ```
 
-## The three leak signals
+## The four leak signals
 
-All three live in `src/home_assist/modules/water/rules/leak_rules.js` as pure functions, so they are
+All four live in `src/home_assist/modules/water/rules/leak_rules.js` as pure functions, so they are
 tested without a meter, a database, or waiting until 2am.
 
-1. **Overnight usage** — more than the threshold between 2am and 5am. The classic running-flapper
-   catcher.
-2. **Continuous flow** — water in *every* hour for 6 consecutive hours. Household use is bursty; a
-   constant trickle is not.
-3. **Radio watchdog** — no readings for 90 minutes. The most important of the three: a receiver that
+1. **Continuous run** — one unbroken run past `run_alarm_min` (60) **or** `run_alarm_gal` (100),
+   whichever comes first. The **fast** one: it answers in minutes what signal 2 needs six hours to
+   say. Two triggers because duration alone misses a burst supply line — that delivers 40–60 gallons
+   in ten minutes, and the 60-minute rule would sit silent while a basement fills. Keyed on the run
+   itself, so one leak is one email and two separate leaks in an evening are two.
+2. **Continuous flow** — water in *every* hour for 6 consecutive hours. Kept alongside signal 1
+   rather than replaced by it, because the two catch different leak **shapes**: a run that never
+   pauses is caught in an hour by the run alarm, while a fill valve cycling every few minutes keeps
+   resetting the run timer and is only ever visible in the hourly buckets.
+3. **Overnight usage** — more than the threshold between 2am and 5am. The classic running-flapper
+   catcher, and the one that needs no run at all — a slow, intermittent leak still adds up
+   overnight.
+4. **Radio watchdog** — no readings for 90 minutes. The most important of the four: a receiver that
    has silently stopped decoding produces a flat zero, which looks exactly like a quiet night.
    **Silence is not safety.**
 
 Plus a daily 8am summary — the proof-of-life that tells you the whole chain still works on a day
-when nothing is wrong.
+when nothing is wrong — and an **all-clear** when an alarming run stops, because an alarm followed
+by silence cannot be told apart from a monitor that died.
+
+Every threshold above is a row in `water_settings`, editable from the Settings page and documented
+live on the **Reference** page, which renders the same catalog the rules use.
 
 ## Layout
 

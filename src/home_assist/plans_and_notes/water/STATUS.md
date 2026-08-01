@@ -28,7 +28,13 @@ first module. Two processes:
 **Rules** (`rules/leak_rules.js`) — pure functions, ported one-for-one from `monitor.mjs`:
 
 - `check_overnight` — usage between 2am and 5am over threshold.
-- `check_continuous` — water in *every* hour for 6 consecutive hours.
+- `check_run_alarm` — one unbroken run past `run_alarm_min` (60) OR `run_alarm_gal` (100). The
+  FAST signal: minutes, not six hours. Keyed on the run's start time rather than a time bucket, so
+  one leak is one email. Added 2026-08-01; before that the run meter was dashboard-only and a
+  daytime leak had a six-hour blind spot on the alerting path.
+- `check_run_cleared` — the all-clear when an alarming run stops. Informational.
+- `check_continuous` — water in *every* hour for 6 consecutive hours. NOT redundant with the run
+  alarm: a fill valve cycling every few minutes resets the run timer and is only visible here.
 - `check_watchdog` — no readings for 90 min. The important one.
 - `daily_summary` — the 8am proof-of-life.
 - `status` — the same rules phrased for the dashboard banner, ignoring cooldowns.

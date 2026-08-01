@@ -201,3 +201,34 @@ sudo ufw allow from 192.168.0.0/16 to any port 8050
 Everything else — the code, the schema, the tests — is identical. `path.join` everywhere, no
 shell-isms, and `time.js` uses the configured `WATER_TZ` rather than the process timezone precisely
 so that moving hosts cannot silently shift the overnight window.
+
+
+## pm2 startup — why it "fails"
+
+`npm run pm2_startup` used to exit **1** and render in the menu as a red cross. That was not an
+error. Bare `pm2 startup` cannot install anything — writing a systemd unit needs root, and pm2 will
+not sudo on your behalf — so it prints the command you must run and exits non-zero. It had done the
+only thing it can do.
+
+The script now wraps it: same command, same output, an explanation of what to do with it, and
+exit 0.
+
+| Command | Does | How often | Root? |
+|---|---|---|---|
+| `pm2 save` | Writes the running process list to `~/.pm2/dump.pm2` | Every time the list changes — it is in `deploy` | no |
+| `pm2 startup` | Installs the systemd unit that launches pm2 at boot | **Once per machine** | **yes** |
+
+`save` records *what* to bring back; `startup` is what makes anything come back at all. Without it
+`dump.pm2` sits there and nothing ever reads it.
+
+**Why it is not in `deploy`:** it would print the same instructions on every deploy, exit 1, and
+break the `&&` chain — and it is Linux-only, so it would fail outright on the Windows laptop.
+
+**The trap.** The sudo line pm2 prints is pinned to the node binary you are running *now*. Under
+nvm that is a versioned path. Upgrade node, remove the old version, and the unit points at
+something that no longer exists — pm2 will not start at boot and you will not find out until the
+next power cut. Re-run `npm run pm2_startup` after any node upgrade, or install node system-wide on
+the server so it is not tied to a user's shell profile.
+
+**The only test that counts is `sudo reboot`,** then `npm run pm2_status` and a look at the Monitor
+for a recent packet.

@@ -168,8 +168,97 @@ function daily_summary(hours, now, cfg, tz) {
  * evaluate — run every rule and return the descriptors that fired, worst first.
  * The collector hands these to store/alerts.js, which applies cooldowns and pushes to ntfy.
  */
+/**
+ * Signal 5 — the run alarm. The fast one.
+ *
+ * check_continuous needs SIX HOURS of hourly buckets before it can speak. This answers the same
+ * question in minutes, off the run the dashboard was already computing, and until now that answer
+ * only ever reached a screen. A daytime leak therefore had a six-hour blind spot on the alerting
+ * path, which is the gap this closes.
+ *
+ * TWO triggers, because duration alone misses the worst case:
+ *
+ *   DURATION  run_alarm_min (60 by default). Beyond almost every legitimate fixture — a shower, a
+ *             tub, a dishwasher and a laundry load overlapping all end well before an hour.
+ *   VOLUME    run_alarm_gal (100). A burst supply line delivers 40-60 gallons in ten minutes; the
+ *             duration trigger would sit silent for a full hour while a basement fills. A full tub
+ *             is ~50 gal and a shower ~20, so 100 clears every single household draw.
+ *
+ * The alert KEY is the run's start time, not a time bucket. Every other alert here uses a
+ * time-based cooldown; this one must not. A 12-hour cooldown would go quiet through a second,
+ * separate leak the same evening, and a short one would spam through a single long one. Keying on
+ * the run gives exactly one email per event, using the cooldown ledger already in place.
+ *
+ * Pure, like every rule here: it takes the run and the settings and returns an alert or null.
+ */
+function check_run_alarm(run, cfg) {
+  if (!run || !run.flowing || !cfg.run_alert_email) return null;
+
+  const by_time = run.minutes >= cfg.run_alarm_min;
+  const gal_limit = Number(cfg.run_alarm_gal) || 0;      // 0 disables the volume trigger
+  const by_volume = gal_limit > 0 && run.gallons >= gal_limit;
+  if (!by_time && !by_volume) return null;
+
+  // `truncated` means current_run hit the end of the rows it was given, so the run started before
+  // what we can see. Saying "at least" is the honest phrasing — claiming a precise start time we
+  // cannot support would make the alert less trustworthy, not more.
+  const start = run.started_at || null;
+  const dur = run.minutes >= 60
+    ? Math.floor(run.minutes / 60) + 'h ' + (run.minutes % 60) + 'm'
+    : run.minutes + ' min';
+
+  return {
+    // One key per RUN. Two separate leaks in an evening are two emails; one long leak is one.
+    key: 'run:' + (start || 'unknown'),
+    kind: 'run',
+    severity: 'high',
+    tags: 'rotating_light,droplet',
+    // Belt and braces against a missing start time — without a key that varies, a null start would
+    // collapse every future run into one alert that fires once and never again.
+    cooldown_min: 6 * 60,
+    message: 'Water has been running ' + (run.truncated ? 'for at least ' : '') + dur +
+      ' without stopping (' + run.gallons.toFixed(0) + ' gal, ' + run.rate.toFixed(1) + ' gal/min)' +
+      (by_volume && !by_time ? ' — past the ' + gal_limit + ' gal mark.' : '.') +
+      ' Nothing in a house runs that long on its own.',
+    detail: {
+      started_at: start, minutes: run.minutes, gallons: run.gallons, rate: run.rate,
+      trigger: by_volume && !by_time ? 'gallons' : 'minutes',
+      alarm_min: cfg.run_alarm_min, alarm_gal: gal_limit, truncated: !!run.truncated,
+    },
+  };
+}
+
+/**
+ * The all-clear. An alarm followed by silence is ambiguous — did it stop, or did the monitor die?
+ * Informational severity, so it reports without waking anyone.
+ *
+ * Keyed on the same run, with a suffix, so it can only ever fire once for a run that actually
+ * alarmed. `last_alarm_run` is the run key the collector last alarmed on; without it this would
+ * announce the end of every ordinary shower.
+ */
+function check_run_cleared(run, cfg, last_alarm_run) {
+  if (!cfg.run_alert_email || !cfg.run_alert_all_clear) return null;
+  if (!last_alarm_run) return null;
+  if (run && run.flowing) return null;                  // still going — nothing to clear yet
+
+  const d = last_alarm_run;
+  const dur = d.minutes >= 60
+    ? Math.floor(d.minutes / 60) + 'h ' + (d.minutes % 60) + 'm'
+    : d.minutes + ' min';
+  return {
+    key: d.key + ':cleared',
+    kind: 'run_cleared',
+    severity: 'low',
+    tags: 'white_check_mark',
+    cooldown_min: 6 * 60,
+    message: 'The run that triggered the alarm has stopped. ' + dur + ', ' +
+      Number(d.gallons).toFixed(0) + ' gal total.',
+    detail: d,
+  };
+}
+
 function evaluate(input) {
-  const { hours, now, cfg, tz, last_read_at, started_at } = input;
+  const { hours, now, cfg, tz, last_read_at, started_at, run, last_alarm_run } = input;
   const out = [];
   const watchdog = check_watchdog(last_read_at, now, cfg, started_at);
   if (watchdog) out.push(watchdog);
@@ -177,6 +266,13 @@ function evaluate(input) {
   if (overnight) out.push(overnight);
   const continuous = check_continuous(hours, now, cfg, tz);
   if (continuous) out.push(continuous);
+  // The fast one. Kept ALONGSIDE check_continuous rather than replacing it: the two catch different
+  // leak SHAPES. A run that never pauses is caught here in an hour; a fill valve that cycles every
+  // few minutes keeps resetting the run timer and is only ever visible in the hourly buckets.
+  const run_alarm = check_run_alarm(run, cfg);
+  if (run_alarm) out.push(run_alarm);
+  const cleared = check_run_cleared(run, cfg, last_alarm_run);
+  if (cleared) out.push(cleared);
   const summary = daily_summary(hours, now, cfg, tz);
   if (summary) out.push(summary);
   return out;
@@ -382,17 +478,30 @@ const ALERT_CATALOG = [
     settings: ['daily_summary_hour'],
   },
   {
-    kind: 'run',
-    label: 'Continuous run (dashboard only)',
-    severity: 'info',
-    when: 'Shown live on the Monitor once a run passes run_warn_min / run_alarm_min.',
-    evaluated: 'Every status poll (5s in the UI).',
-    cooldown_min: null,
-    email: false,
-    why: 'Answers in MINUTES what the hourly continuous rule needs six hours to say. Does NOT email ' +
-      'yet — it is a dashboard signal only.',
-    settings: ['run_gap_min', 'run_warn_min', 'run_alarm_min'],
+    key: 'run',
+    label: 'Continuous run',
+    severity: 'high',
+    when: 'One unbroken run passes run_alarm_min OR run_alarm_gal, whichever comes first.',
+    cooldown_min: 6 * 60,
+    email: true,
+    why: 'The FAST one. The hourly continuous rule needs six hours of buckets before it can speak, ' +
+      'which left a six-hour blind spot on a daytime leak; this answers in minutes. Two triggers ' +
+      'because duration alone misses a burst supply line -- that delivers 40-60 gallons in ten ' +
+      'minutes. Keyed on the run itself, so one leak is one email and two separate leaks in an ' +
+      'evening are two.',
+    settings: ['run_gap_min', 'run_warn_min', 'run_alarm_min', 'run_alarm_gal', 'run_alert_email'],
   },
+  {
+    key: 'run_cleared',
+    label: 'Run stopped (all clear)',
+    severity: 'low',
+    when: 'A run that had alarmed comes to an end.',
+    cooldown_min: 6 * 60,
+    email: true,
+    why: 'An alarm followed by silence is ambiguous: you cannot tell "it stopped" from "the ' +
+      'monitor died". Informational, so it reports without waking you.',
+    settings: ['run_alert_all_clear'],
+  }
 ];
 
 
@@ -578,6 +687,7 @@ function decode_rate(packets, interval_seconds, window_seconds) {
 
 module.exports = {
   SIGNAL_QUALITY, signal_band, median_interval, gap_spans, decode_rate,
+  check_run_alarm, check_run_cleared,
   sum_hours, overnight_keys,
   check_overnight, check_continuous, check_watchdog, daily_summary, current_run, run_spans,
   evaluate, status, ALERT_CATALOG,

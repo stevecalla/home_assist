@@ -126,6 +126,21 @@ const DEFS = {
       'YEAR — there is rarely a reason to trim. The hourly rollup that every chart and leak rule ' +
       'reads is never pruned, so trimming this costs you Diagnostics detail and nothing else.',
   },
+  run_alarm_gal: {
+    type: 'int', def: 100, group: 'Continuous flow', min: 0, max: 5000,
+    label: 'Run volume that means something burst (gallons)',
+    help: 'Emails as soon as ONE unbroken run passes this, however short. Duration alone misses a burst supply line -- that delivers 40-60 gal in ten minutes and the 60-minute rule would sit silent while a basement fills. A full tub is ~50 gal and a shower ~20, so 100 clears every normal draw. 0 turns the volume trigger off and leaves only the minutes one.',
+  },
+  run_alert_email: {
+    type: 'bool', def: 1, group: 'Continuous flow',
+    label: 'Email on a continuous run',
+    help: 'Off = the run meter still shows on the Monitor but never emails, which is how this behaved before. The hourly continuous rule is unaffected -- but that one needs six hours to speak, so turning this off restores a six-hour blind spot on a daytime leak.',
+  },
+  run_alert_all_clear: {
+    type: 'bool', def: 1, group: 'Continuous flow',
+    label: 'Email when the run stops',
+    help: 'A follow-up saying how long it ran and how many gallons. An alarm followed by silence is ambiguous -- you cannot tell "it stopped" from "the monitor died". Informational, so it does not wake you. Only ever sent for a run that actually alarmed.',
+  },
   packets_enabled: {
     type: 'bool', def: 1, group: 'Data',
     label: 'Record every transmission',

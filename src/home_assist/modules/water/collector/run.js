@@ -152,6 +152,11 @@ async function create_collector(options) {
   // what makes their trace usable as a reference signal rather than a flat line of raw counts.
   let packet_buf = [];
   const last_volume = new Map();
+
+  // The run that last raised an alarm, held only in memory. A collector restart loses it, and that
+  // is the right trade: the cost is one missed all-clear, and the alternative — a table — would
+  // make a purely informational follow-up into schema.
+  let last_alarm_run = null;
   let pkt_ours = 0;       // ...that came from our meter id
   let gal_since = 0;      // gallons credited since the last report
 
@@ -317,15 +322,39 @@ async function create_collector(options) {
         today_gallons: rules.sum_hours(hours, today_keys).total,
       };
 
+      // The run, computed here rather than only in the API, because the run alarm is the FAST
+      // signal and the collector is the process that must be able to raise it. 500 rows covers a
+      // leak at 1 gal/min for eight hours; current_run reports `truncated` if it hits the end
+      // rather than pretending it knows when the run began.
+      const recent = await readings.recent_readings(meter_id, 500);
+      const current = rules.current_run(recent, now, cfg);
+
       const fired = rules.evaluate({
         hours: hours, now: now, cfg: cfg, tz: time.zone(),
         last_read_at: last ? last.at : null,
         started_at: started_at,
+        run: current,
+        last_alarm_run: last_alarm_run,
       });
       for (const alert of fired) {
         const r = await alerts.dispatch(alert, cfg, ctx);
         if (r.sent) log('ALERT [' + alert.kind + '] ' + alert.message + '  (' + r.note + ')');
+        // Remember the run we alarmed on, so the all-clear knows WHICH run ended and does not
+        // announce the end of every ordinary shower. Recorded on the attempt, not on delivery: a
+        // failed send is still an alarm that happened, and re-alarming would be worse than a
+        // missing all-clear.
+        if (alert.kind === 'run') {
+          last_alarm_run = {
+            key: alert.key,
+            minutes: current.minutes,
+            gallons: current.gallons,
+            started_at: current.started_at,
+          };
+        }
       }
+      // The run ended and the all-clear has gone out (or was disabled) — forget it, so the next
+      // run starts from a clean slate.
+      if (last_alarm_run && !current.flowing) last_alarm_run = null;
 
       // Persist what the radio heard this minute BEFORE anything else in the tick can fail. This
       // is the record you go looking for when the dashboard is empty and you need to know whether
