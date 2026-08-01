@@ -105,6 +105,75 @@ function mount(app) {
     });
   }));
 
+  // ── reference: the alert schedule and the operational facts, rendered from the same source the
+  //    rules use. Panel 'water' (not water-admin) — knowing when you WILL be woken is not an
+  //    administrative privilege, and a reference page nobody can reach documents nothing.
+  app.get('/api/water/reference', require_panel('water'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const described = settings.describe(cfg);
+    const by_name = {};
+    described.forEach(function (s) { by_name[s.name] = s; });
+
+    res.json({
+      ok: true,
+      tz: time.zone(),
+      tick_seconds: 60,
+      // Each catalog entry carries its settings' CURRENT values, so the page shows what will
+      // actually happen tonight rather than what the defaults once were.
+      alerts: rules.ALERT_CATALOG.map(function (a) {
+        return Object.assign({}, a, {
+          settings: (a.settings || []).map(function (n) {
+            const d = by_name[n] || {};
+            return { name: n, label: d.label || n, value: cfg[n], help: d.help || '' };
+          }),
+        });
+      }),
+      channels: {
+        email: { enabled: !!cfg.alert_email_enabled, to: mailer.config().recipient || mailer.config().sender, configured: mailer.configured() },
+        ntfy: { enabled: !!cfg.alert_ntfy_enabled, server: cfg.ntfy_server, topic_set: !!cfg.ntfy_topic },
+      },
+      retention: {
+        raw_sample_keep: cfg.raw_sample_keep,
+        readings_retention_days: cfg.readings_retention_days,
+        alerts_retention_days: cfg.alerts_retention_days,
+      },
+      meter: { id: cfg.meter_id, name: cfg.meter_name, gallons_per_unit: cfg.gallons_per_unit },
+    });
+  }));
+
+  // ── reception: the persistent "is the radio hearing my meter" record ──
+  app.get('/api/water/reception', require_panel('water'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const minutes = Math.max(5, Math.min(Number(req.query.minutes) || 60, 1440));
+    const [series, state] = await Promise.all([
+      readings.reception_series(cfg.meter_id, minutes),
+      readings.get_state(cfg.meter_id),
+    ]);
+    const now = new Date();
+    const last_read_at = state && state.last_read_at_utc ? new Date(state.last_read_at_utc + 'Z') : null;
+    res.json({
+      ok: true,
+      tz: time.zone(),
+      minutes: minutes,
+      meter_id: cfg.meter_id,
+      // Seconds since the last packet from OUR meter. This is the real-time number — the per-minute
+      // series is the history behind it.
+      seconds_since_last: last_read_at ? Math.max(0, Math.round((now - last_read_at) / 1000)) : null,
+      series: series.map(function (r) {
+        return {
+          minute_utc: new Date(r.minute_utc + 'Z').toISOString(),
+          minute_mtn: r.minute_mtn,
+          packets_total: Number(r.packets_total),
+          packets_ours: Number(r.packets_ours),
+          other_ids: r.other_ids || null,
+          rssi_avg: r.rssi_avg === null ? null : Number(r.rssi_avg),
+          rssi_best: r.rssi_best === null ? null : Number(r.rssi_best),
+          snr_avg: r.snr_avg === null ? null : Number(r.snr_avg),
+        };
+      }),
+    });
+  }));
+
   // ── charts ──
   app.get('/api/water/hourly', require_panel('water'), guard(async function (req, res) {
     const cfg = await settings.all();

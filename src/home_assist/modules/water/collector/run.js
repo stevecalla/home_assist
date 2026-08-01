@@ -80,6 +80,15 @@ async function create_collector(options) {
 
   // Counters for the proof-of-life line, reset each time it is printed.
   let pkt_total = 0;      // every JSON line rtl_433 produced
+  // Which meter ids we actually heard, and how often. Without this, "0 ours" tells you something is
+  // wrong but not what: a neighbour's endpoint arriving loud and clear looks identical in the log to
+  // silence plus noise. Naming the ids turns "why is nothing recorded?" into "you are hearing
+  // 14905174, not 16642655" — a reception/config answer instead of a mystery.
+  let ids_seen = new Map();
+  // Per-minute reception accumulators. Written to water_reception on every tick, so there is a
+  // PERSISTENT record of what the radio heard — the thing water_raw_samples deliberately is not.
+  let rx_total = 0, rx_ours = 0;
+  let rssi_sum = 0, rssi_n = 0, rssi_best = null, snr_sum = 0, snr_n = 0;
   let pkt_ours = 0;       // ...that came from our meter id
   let gal_since = 0;      // gallons credited since the last report
 
@@ -106,6 +115,7 @@ async function create_collector(options) {
     let msg;
     try { msg = JSON.parse(line); } catch (e) { return; }
     pkt_total++;
+    rx_total++;
 
     const reading = ingest.extract_reading(msg);
     if (!reading) {
@@ -135,8 +145,21 @@ async function create_collector(options) {
       return;
     }
 
+    if (reading.id !== null && reading.id !== undefined) {
+      ids_seen.set(reading.id, (ids_seen.get(reading.id) || 0) + 1);
+    }
+
     if (!ingest.is_our_meter(reading, cfg.meter_id)) return;   // a neighbour's endpoint
     pkt_ours++;
+    rx_ours++;
+
+    // Signal strength, when the decoder is reporting it (-M level in WATER_RTL433_ARGS). Optional
+    // by design: the reception COUNT is the thing that matters, and it works without extra flags.
+    if (typeof msg.rssi === 'number' && Number.isFinite(msg.rssi)) {
+      rssi_sum += msg.rssi; rssi_n++;
+      if (rssi_best === null || msg.rssi > rssi_best) rssi_best = msg.rssi;
+    }
+    if (typeof msg.snr === 'number' && Number.isFinite(msg.snr)) { snr_sum += msg.snr; snr_n++; }
 
     const at = new Date();
     const gallons = reading.raw * cfg.gallons_per_unit;
@@ -211,6 +234,24 @@ async function create_collector(options) {
         if (r.sent) log('ALERT [' + alert.kind + '] ' + alert.message + '  (' + r.note + ')');
       }
 
+      // Persist what the radio heard this minute BEFORE anything else in the tick can fail. This
+      // is the record you go looking for when the dashboard is empty and you need to know whether
+      // the radio was the problem — so it must survive a bad hour, not depend on one.
+      await readings.record_reception(meter_id, now, {
+        packets_total: rx_total,
+        packets_ours: rx_ours,
+        other_ids: Array.from(ids_seen.entries())
+          .filter(function (e) { return Number(e[0]) !== Number(cfg.meter_id); })
+          .sort(function (a, b) { return b[1] - a[1]; })
+          .slice(0, 6)
+          .map(function (e) { return e[0] + 'x' + e[1]; })
+          .join(' ') || null,
+        rssi_avg: rssi_n ? Number((rssi_sum / rssi_n).toFixed(2)) : null,
+        rssi_best: rssi_best === null ? null : Number(rssi_best.toFixed(2)),
+        snr_avg: snr_n ? Number((snr_sum / snr_n).toFixed(2)) : null,
+      });
+      rx_total = 0; rx_ours = 0; rssi_sum = 0; rssi_n = 0; rssi_best = null; snr_sum = 0; snr_n = 0;
+
       ticks++;
 
       // Proof of life. The meter broadcasts every few seconds but the odometer only moves when water
@@ -224,8 +265,20 @@ async function create_collector(options) {
           log('radio ok — ' + pkt_total + ' packets in ' + mins + 'm (' + pkt_ours + ' ours)' +
             (last ? ' · odometer ' + last.gallons.toFixed(0) + ' gal' : '') +
             ' · +' + gal_since.toFixed(0) + ' gal since last report');
+
+          // Hearing packets but none of them ours is the confusing failure: everything looks
+          // healthy and nothing is ever recorded. Name the ids and say so outright.
+          if (pkt_ours === 0 && ids_seen.size) {
+            const list = Array.from(ids_seen.entries())
+              .sort(function (a, b) { return b[1] - a[1]; })
+              .map(function (e) { return e[0] + ' x' + e[1]; })
+              .join(', ');
+            log('  NONE were meter ' + cfg.meter_id + '. Heard instead: ' + list);
+            log('  The radio is fine; it cannot hear YOUR meter from here. Move the antenna toward');
+            log('  the pit (extend the USB cable, not coax), or confirm the meter id on Settings.');
+          }
         }
-        pkt_total = 0; pkt_ours = 0; gal_since = 0;
+        pkt_total = 0; pkt_ours = 0; gal_since = 0; ids_seen = new Map();
       }
 
       // Hourly retention sweep. Runs inside the tick rather than only at startup — a collector that
@@ -240,8 +293,10 @@ async function create_collector(options) {
     const raw = await readings.prune_raw(cfg.raw_sample_keep);
     const old_readings = await readings.prune_readings(cfg.readings_retention_days);
     const old_alerts = await readings.prune_alerts(cfg.alerts_retention_days);
-    if (raw || old_readings || old_alerts) {
-      log('retention sweep: removed ' + raw + ' raw, ' + old_readings + ' readings, ' + old_alerts + ' alerts');
+    const old_rx = await readings.prune_reception(cfg.reception_retention_days);
+    if (raw || old_readings || old_alerts || old_rx) {
+      log('retention sweep: removed ' + raw + ' raw, ' + old_readings + ' readings, ' +
+        old_alerts + ' alerts, ' + old_rx + ' reception rows');
     }
   }
 

@@ -82,6 +82,63 @@ async function get_state(meter_id) {
   return rows[0] || null;
 }
 
+/**
+ * One row per minute saying what the radio actually heard.
+ *
+ * This is the table that answers "is it hearing my meter RIGHT NOW?" — the question
+ * water_raw_samples cannot answer, because that one stops after a fixed number of packets per run
+ * by design and then looks identical to a dead radio.
+ *
+ * UPSERT on (meter_id, minute) so a tick that straddles a minute boundary tops up the row it
+ * belongs to rather than losing the count.
+ */
+async function record_reception(meter_id, at, stats) {
+  const minute = new Date(Math.floor(at.getTime() / 60000) * 60000);
+  const s = time.stamps(minute);
+  const n = now_stamps();
+  try {
+    await db.query(
+      'INSERT INTO water_reception (meter_id, minute_utc, minute_mtn, packets_total, packets_ours, ' +
+      'other_ids, rssi_avg, rssi_best, snr_avg, created_at_mtn, created_at_utc) ' +
+      'VALUES (?,?,?,?,?,?,?,?,?,?,?) ' +
+      'ON DUPLICATE KEY UPDATE packets_total = packets_total + VALUES(packets_total), ' +
+      'packets_ours = packets_ours + VALUES(packets_ours), other_ids = VALUES(other_ids), ' +
+      'rssi_avg = VALUES(rssi_avg), rssi_best = VALUES(rssi_best), snr_avg = VALUES(snr_avg)',
+      [
+        meter_id, s.utc, s.local,
+        stats.packets_total || 0, stats.packets_ours || 0,
+        stats.other_ids ? String(stats.other_ids).slice(0, 250) : null,
+        stats.rssi_avg === null || stats.rssi_avg === undefined ? null : stats.rssi_avg,
+        stats.rssi_best === null || stats.rssi_best === undefined ? null : stats.rssi_best,
+        stats.snr_avg === null || stats.snr_avg === undefined ? null : stats.snr_avg,
+        n.local, n.utc,
+      ]
+    );
+  } catch (e) { /* diagnostics must never break ingest */ }
+}
+
+/** The last N minutes of reception, oldest first — what the Diagnostics chart draws. */
+async function reception_series(meter_id, minutes) {
+  const n = Math.max(1, Math.min(Number(minutes) || 60, 1440));
+  const rows = await db.query(
+    'SELECT minute_utc, minute_mtn, packets_total, packets_ours, other_ids, rssi_avg, rssi_best, snr_avg ' +
+    'FROM water_reception WHERE meter_id = ? AND minute_utc >= (UTC_TIMESTAMP() - INTERVAL ? MINUTE) ' +
+    'ORDER BY minute_utc',
+    [meter_id, n]
+  );
+  return rows;
+}
+
+async function prune_reception(days) {
+  const d = Number(days) || 0;
+  if (d <= 0) return 0;
+  try {
+    const cutoff = time.sql_utc(new Date(Date.now() - d * 86400 * 1000));
+    const r = await db.query('DELETE FROM water_reception WHERE minute_utc < ? LIMIT 50000', [cutoff]);
+    return r && r.affectedRows ? r.affectedRows : 0;
+  } catch (e) { return 0; }
+}
+
 async function log_raw(reason, line) {
   try {
     const n = now_stamps();
@@ -236,5 +293,6 @@ async function recent_readings(meter_id, limit) {
 module.exports = {
   insert_reading, bump_hour, save_state, get_state, log_raw,
   prune_raw, prune_readings, prune_alerts, table_sizes,
+  record_reception, reception_series, prune_reception,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,
 };

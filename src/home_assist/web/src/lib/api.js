@@ -61,4 +61,6 @@ export const api = {
   waterTestAlert: () => jpost('/api/water/test-alert', {}),
   waterEmailCheck: () => jget('/api/water/email-check'),
   waterRaw: (limit) => jget('/api/water/raw?limit=' + (limit || 20)),
+  waterReference: () => jget('/api/water/reference'),
+  waterReception: (minutes) => jget('/api/water/reception?minutes=' + (minutes || 60)),
 };

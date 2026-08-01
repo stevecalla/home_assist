@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
+import BarChart from './BarChart.jsx';
 import './water.css';
 
 // Diagnostics — the page you open when the numbers look wrong.
@@ -25,10 +26,22 @@ export default function Diagnostics() {
   const [readings, setReadings] = useState(null);
   const [emailCheck, setEmailCheck] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [rx, setRx] = useState(null);
+  // Ticks every second purely so "3s ago" counts up smoothly between polls. Without it the number
+  // freezes for 5 seconds at a time and looks stuck — which on THIS card is the exact wrong message.
+  const [, setNowTick] = useState(0);
 
   useEffect(() => {
     api.waterRaw(20).then((r) => { if (r.status === 200 && r.body.ok) setRaw(r.body.samples); });
     api.waterReadings(40).then((r) => { if (r.status === 200 && r.body.ok) setReadings(r.body.readings); });
+
+    const loadRx = () => api.waterReception(60).then((r) => {
+      if (r.status === 200 && r.body.ok) setRx(r.body);
+    });
+    loadRx();
+    const poll = setInterval(loadRx, 5000);
+    const clock = setInterval(() => setNowTick((n) => n + 1), 1000);
+    return () => { clearInterval(poll); clearInterval(clock); };
   }, []);
 
   async function checkEmail() {
@@ -62,6 +75,44 @@ export default function Diagnostics() {
             ) : null}
           </p>
         ) : null}
+      </div>
+
+
+      {/* ── the live one ─────────────────────────────────────────────────────────── */}
+      <div className="w-chart-card">
+        <div className="w-chart-head">
+          <h3 className="w-chart-title">Reception — is the radio hearing your meter?</h3>
+          {rx ? <RxBadge seconds={rx.seconds_since_last} /> : null}
+        </div>
+        <p className="w-chart-sub">
+          One bar per minute, counting packets from <strong>your</strong> meter. This is written to{' '}
+          <code>water_reception</code> continuously and kept for weeks — unlike the raw lines below,
+          which stop after the first 20 of each run by design. <strong>A gap here is real:</strong>{' '}
+          it means the radio genuinely heard nothing that minute.
+        </p>
+
+        {!rx ? <p className="muted">Loading…</p> : !rx.series.length ? (
+          <p className="muted">
+            No reception rows yet. The collector writes one a minute — the first appears within 60
+            seconds of it starting.
+          </p>
+        ) : (
+          <>
+            <BarChart
+              data={rx.series.map((m) => ({
+                key: m.minute_utc,
+                label: String(m.minute_mtn || '').slice(11, 16),
+                value: m.packets_ours,
+                observed: true,
+              }))}
+              height={140}
+              unit="packets"
+              formatTip={(d) => d.label + ' · ' + d.value + ' packets'}
+              emptyMessage="No reception rows yet."
+            />
+            <RxStats series={rx.series} />
+          </>
+        )}
       </div>
 
       <div className="w-chart-card">
@@ -149,6 +200,47 @@ export default function Diagnostics() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// "Heard 3s ago" — the number you watch while moving an antenna. Green under a minute, because the
+// meter broadcasts every ~4s and anything past 60s means something changed.
+function RxBadge({ seconds }) {
+  if (seconds === null || seconds === undefined) {
+    return <span className="w-live-badge idle"><span className="w-dot-live" />Never heard</span>;
+  }
+  const good = seconds <= 60;
+  return (
+    <span className={'w-live-badge ' + (good ? 'flowing' : 'idle')}>
+      <span className="w-dot-live" aria-hidden="true" />
+      {good ? 'Heard ' + seconds + 's ago' : 'Silent ' + Math.round(seconds / 60) + 'm'}
+    </span>
+  );
+}
+
+// The numbers you actually tune an antenna against. rssi/snr are only present when -M level is in
+// WATER_RTL433_ARGS; say so rather than showing an empty column nobody can explain.
+function RxStats({ series }) {
+  const mins = series.length;
+  const ours = series.reduce((a, m) => a + m.packets_ours, 0);
+  const total = series.reduce((a, m) => a + m.packets_total, 0);
+  const dead = series.filter((m) => m.packets_ours === 0).length;
+  const withRssi = series.filter((m) => m.rssi_avg !== null);
+  const rssi = withRssi.length ? withRssi.reduce((a, m) => a + m.rssi_avg, 0) / withRssi.length : null;
+  const withSnr = series.filter((m) => m.snr_avg !== null);
+  const snr = withSnr.length ? withSnr.reduce((a, m) => a + m.snr_avg, 0) / withSnr.length : null;
+  const others = [...new Set(series.map((m) => m.other_ids).filter(Boolean))].join(' ');
+
+  return (
+    <div className="w-rx-stats">
+      <span><b>{(ours / Math.max(1, mins)).toFixed(1)}</b> packets/min from your meter</span>
+      <span><b>{ours}</b> of {total} heard were yours</span>
+      <span className={dead ? 'bad' : ''}><b>{dead}</b> minute{dead === 1 ? '' : 's'} with none</span>
+      {snr !== null
+        ? <span>SNR <b>{snr.toFixed(1)} dB</b>{rssi !== null ? ' · RSSI ' + rssi.toFixed(1) : ''}</span>
+        : <span className="muted">signal strength needs <code>-M level</code> in the rtl_433 args</span>}
+      {others ? <span className="muted">also hearing {others}</span> : null}
     </div>
   );
 }

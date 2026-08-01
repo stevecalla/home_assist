@@ -12,6 +12,7 @@ const WaterHistory = lazy(() => import('./modules/water/History.jsx'));
 const WaterAlerts = lazy(() => import('./modules/water/Alerts.jsx'));
 const WaterSettings = lazy(() => import('./modules/water/Settings.jsx'));
 const WaterDiagnostics = lazy(() => import('./modules/water/Diagnostics.jsx'));
+const WaterReference = lazy(() => import('./modules/water/Reference.jsx'));
 
 export const NAV = [
   {
@@ -21,10 +22,11 @@ export const NAV = [
       { label: 'Alerts', path: '/water/alerts', panel: 'water', icon: '🔔', Component: WaterAlerts },
       { label: 'Settings', path: '/water/settings', panel: 'water-admin', icon: '⚙', Component: WaterSettings },
       { label: 'Diagnostics', path: '/water/diagnostics', panel: 'water-admin', icon: '📡', Component: WaterDiagnostics },
+      { label: 'Reference', path: '/water/reference', panel: 'water', icon: '📖', Component: WaterReference },
     ],
   },
   {
-    type: 'group', label: 'Admin', items: [
+    type: 'group', label: 'Admin', defaultCollapsed: true, items: [
       { label: 'Users & access', path: '/admin/users', panel: 'admin', icon: '👤', Component: Admin },
     ],
   },

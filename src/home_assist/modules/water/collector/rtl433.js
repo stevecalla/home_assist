@@ -38,6 +38,7 @@ const DEFAULT_ARGS = '-f 916.45M -s 1600k -R 223 -F json';
 function resolve_cmd() { return platform_env('WATER_RTL433_CMD', 'rtl_433'); }
 function resolve_args() { return platform_env('WATER_RTL433_ARGS', DEFAULT_ARGS); }
 function cmd_source() { return platform_env_source('WATER_RTL433_CMD'); }
+function args_source() { return platform_env_source('WATER_RTL433_ARGS'); }
 
 function parse_args(str) {
   // Split on whitespace, honouring simple double-quoted segments.
@@ -230,6 +231,7 @@ function has_orion_decoder(cmd) {
 }
 
 module.exports = {
+  args_source,
   start, start_live, start_replay, parse_args, check_command, has_orion_decoder,
   resolve_cmd, resolve_args, cmd_source, DEFAULT_ARGS,
 };

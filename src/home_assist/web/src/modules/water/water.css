@@ -323,3 +323,62 @@
   /* Below this the full weekday+month stamp crowds the verdict text; give it its own line. */
   .w-banner-stamp { margin-left: 0; width: 100%; }
 }
+
+/* ── reference page ──────────────────────────────────────────────────────────
+   Each alert is a block, not a table row: the "why" is a sentence, and sentences
+   in table cells wrap into unreadable columns on a phone. */
+.w-ref-list { display: flex; flex-direction: column; gap: 12px; }
+.w-ref-item {
+  padding: 11px 13px; border: 1px solid var(--w-grid); border-radius: 8px;
+  border-left-width: 3px; background: var(--w-band);
+}
+.w-ref-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-bottom: 5px; }
+.w-ref-name { font-weight: 700; font-size: 14px; }
+.w-ref-cool { margin-left: auto; font-size: 11.5px; color: var(--w-axis); white-space: nowrap; }
+.w-ref-when { font-size: 12.5px; margin-bottom: 3px; }
+.w-ref-why  { font-size: 12.5px; opacity: .72; }
+
+/* Severity always carries a WORD; the color only reinforces it. */
+.w-ref-sev {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor;
+}
+.sev-high { color: var(--w-critical); }
+.sev-low  { color: var(--w-series); }
+.sev-info { color: var(--w-axis); }
+
+.w-ref-settings { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.w-ref-chip {
+  font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--w-grid); cursor: help;
+}
+
+/* ── collapsible cards (usat_apps CollapsibleCard) ───────────────────────────
+   The caret and the title are one button so the hit target is the whole title,
+   not a 14px glyph. Actions in the header stop propagation, so an export or a
+   "Change these" link never collapses the card out from under the click. */
+.w-card-toggle {
+  display: flex; align-items: baseline; gap: 8px;
+  border: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.w-card-toggle:hover .w-chart-title { text-decoration: underline; text-underline-offset: 3px; }
+.w-card-toggle:focus-visible { outline: 2px solid var(--w-series); outline-offset: 3px; border-radius: 4px; }
+.w-card-caret { color: var(--w-axis); font-size: 11px; width: 12px; flex: none; }
+
+.w-card-actions { margin-left: auto; }
+
+/* A collapsed card is just its header — no dead padding under the title. */
+.w-chart-card.is-collapsed { padding-bottom: 12px; }
+.w-chart-card.is-collapsed .w-chart-head { margin-bottom: 0; }
+
+.w-card-bar { display: flex; gap: 8px; margin: 0 0 12px; }
+.btn.small { padding: 3px 10px; font-size: 12px; }
+
+/* Reception stats strip — the numbers you tune an antenna against. */
+.w-rx-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  margin-top: 10px; font-size: 12.5px;
+}
+.w-rx-stats b { font-variant-numeric: tabular-nums; }
+.w-rx-stats .bad b { color: var(--w-critical); }

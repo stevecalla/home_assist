@@ -87,6 +87,14 @@ async function preflight(mode) {
       console.log(orion.ok
         ? '  decoder    : ' + orion.detail
         : '  decoder    : PROBLEM — ' + orion.reason);
+
+      // The ARGS matter as much as the command — sample rate and gain decide whether a weak meter
+      // is decodable at all — and until now the preflight reported the command but never them. An
+      // override that silently is not in effect (an unsuffixed WATER_RTL433_ARGS beats the
+      // _LINUX one) looked identical to one that was.
+      const args_src = rtl433.args_source();
+      console.log('  args       : ' + rtl433.resolve_args() +
+        '  (from ' + (args_src || 'built-in default') + ')');
     }
   } else {
     console.log('  rtl_433    : not checked (replay mode)');

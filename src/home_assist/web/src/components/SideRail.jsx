@@ -6,7 +6,17 @@ import { NAV, canSee } from '../nav.js';
 // (open/closed persisted in localStorage) and only show panels the user can reach. A LINKS section at
 // the bottom (external, new-tab) mirrors the proxy console — shown to users who can reach Ops.
 const LSKEY = 'home_assist_rail_collapsed';
-function loadCollapsed() { try { return JSON.parse(localStorage.getItem(LSKEY)) || {}; } catch (e) { return {}; } }
+// Seed from each group's `defaultCollapsed` hint, then let anything the user has actually toggled
+// win. Reading the saved object alone made a new default impossible to introduce: an absent key is
+// indistinguishable from "the user opened it", so the hint would never apply to anyone who had ever
+// used the rail.
+function loadCollapsed() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LSKEY)) || {}; } catch (e) { saved = {}; }
+  const defaults = {};
+  NAV.forEach(function (n) { if (n.type === 'group') defaults[n.label] = n.defaultCollapsed === true; });
+  return Object.assign(defaults, saved);
+}
 
 const LINKS = [
   ['/api/status', '/api/status'],

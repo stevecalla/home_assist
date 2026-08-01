@@ -68,6 +68,8 @@ const CREATED_AT = `
  * the same reason the table COMMENTs are -- this text ends up in CSV exports and schema dumps.
  */
 const SHORT = {
+  water_reception:
+    "Per-minute proof the radio is hearing your meter: packets decoded, how many were ours, how strong. Runs forever, unlike water_raw_samples.",
   water_readings:
     "Every accepted meter reading that carried flow: odometer + gallons credited. Detail only -- charts and leak rules read water_hourly.",
   water_hourly:
@@ -81,6 +83,9 @@ const SHORT = {
   water_raw_samples:
     "Rolling buffer of raw rtl_433 lines for decoder field-name forensics. A diagnostic buffer, not an archive -- pruned hourly.",
 };
+
+const PURPOSE_RECEPTION =
+  'Per-minute reception log: how many packets the radio decoded, how many were OURS, and how strong they were. One row per minute for as long as the collector runs. This is the table to look at to answer "is it hearing my meter right now?" -- water_raw_samples cannot answer it, because that one stops after a fixed number of packets per run on purpose. A gap in this table is the real signal that reception was lost.';
 
 const TABLES = [
   {
@@ -216,6 +221,26 @@ const TABLES = [
      KEY idx_time (seen_at_utc)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
+  {
+    name: 'water_reception',
+    short: SHORT.water_reception,
+    purpose_after: 'minute_utc',
+    purpose: PURPOSE_RECEPTION,
+    ddl: `CREATE TABLE IF NOT EXISTS water_reception (
+     meter_id      BIGINT UNSIGNED NOT NULL,
+     minute_utc    DATETIME        NOT NULL COMMENT 'the minute this row summarises, truncated',
+     purpose ${PURPOSE_COL}'${SHORT.water_reception}',
+     minute_mtn    DATETIME        NOT NULL,
+     packets_total INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT 'every meter decoded, ours and neighbours',
+     packets_ours  INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT 'from our meter_id only',
+     other_ids     VARCHAR(255)    NULL COMMENT 'other meter ids heard, for antenna work',
+     rssi_avg      DECIMAL(6,2)    NULL COMMENT 'needs -M level in WATER_RTL433_ARGS; NULL otherwise',
+     rssi_best     DECIMAL(6,2)    NULL,
+     snr_avg       DECIMAL(6,2)    NULL,${CREATED_AT},
+     PRIMARY KEY (meter_id, minute_utc),
+     KEY idx_minute (minute_utc)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  },
 ];
 
 /**
@@ -244,6 +269,9 @@ const ADDED_COLUMNS = [
   ['water_settings', 'updated_at_mtn', 'DATETIME NULL'],
   ['water_settings', 'created_at_mtn', CREATED_MTN],
   ['water_settings', 'created_at_utc', CREATED_UTC],
+  ['water_reception', 'purpose', purpose_def(SHORT.water_reception, 'minute_utc')],
+  ['water_reception', 'created_at_mtn', CREATED_MTN],
+  ['water_reception', 'created_at_utc', CREATED_UTC],
   ['water_raw_samples', 'seen_at_mtn', 'DATETIME NULL'],
   ['water_raw_samples', 'created_at_mtn', CREATED_MTN],
   ['water_raw_samples', 'created_at_utc', CREATED_UTC],

@@ -314,8 +314,89 @@ function current_run(readings, now, cfg) {
   };
 }
 
+/**
+ * ALERT_CATALOG — what can fire, when, and which setting moves it.
+ *
+ * Lives HERE, next to the rules it describes, and is rendered by the Reference page rather than
+ * retyped there. A reference page maintained by hand is a reference page that is wrong within two
+ * releases, and being wrong about when your leak alarm fires is worse than having no page at all.
+ *
+ * `cooldown_min` and `settings` are read straight from the checks above — if you change a cooldown,
+ * change it in one place and both the behaviour and the documentation move together.
+ */
+const ALERT_CATALOG = [
+  {
+    kind: 'overnight',
+    label: 'Overnight flow',
+    severity: 'high',
+    when: 'Once the overnight window has passed, if more than the threshold ran during it.',
+    evaluated: 'Every 60s, but the window is only judged after it ends.',
+    cooldown_min: 20 * 60,
+    why: 'A house asleep uses almost nothing. Water between 2am and 5am is the single clearest ' +
+      'leak signal there is, which is why this is the alert to tune first.',
+    settings: ['overnight_start_hour', 'overnight_end_hour', 'overnight_threshold_gal'],
+  },
+  {
+    kind: 'continuous',
+    label: 'Continuous flow',
+    severity: 'high',
+    when: 'Water in EVERY hour for the configured number of consecutive hours.',
+    evaluated: 'Every 60s, over whole local hours.',
+    cooldown_min: 12 * 60,
+    why: 'Nothing in a house runs every hour for six hours. One dry hour resets the streak, and a ' +
+      'MISSING hour does not count as dry — no data is not the same as no flow.',
+    settings: ['continuous_hours', 'continuous_min_gal_per_hour'],
+  },
+  {
+    kind: 'stale',
+    label: 'Receiver silent',
+    severity: 'high',
+    when: 'No meter reading for stale_minutes.',
+    evaluated: 'Every 60s.',
+    cooldown_min: 6 * 60,
+    why: 'THE most important alert. A dead receiver produces a flat zero, which is indistinguishable ' +
+      'from a quiet night — without this, the system fails silently and you find out from the water bill.',
+    settings: ['stale_minutes'],
+  },
+  {
+    kind: 'stale',
+    key: 'never_decoded',
+    label: 'Never decoded a packet',
+    severity: 'high',
+    when: 'The collector has run past stale_minutes and has never heard the meter.',
+    evaluated: 'Every 60s.',
+    cooldown_min: 6 * 60,
+    why: 'A separate alert from "went silent" because it is a different problem: this one is a setup ' +
+      'fault you can fix now (antenna, dongle, frequency), not a working system that broke.',
+    settings: ['stale_minutes'],
+  },
+  {
+    kind: 'summary',
+    label: 'Daily summary',
+    severity: 'low',
+    when: 'At the configured hour, every day.',
+    evaluated: 'Every 60s; fires on the matching local hour.',
+    cooldown_min: 20 * 60,
+    why: 'Proof of life. An email that arrives every morning is how you know the alerting path ' +
+      'itself still works — silence from a monitor is ambiguous, and this removes the ambiguity.',
+    settings: ['daily_summary_hour'],
+  },
+  {
+    kind: 'run',
+    label: 'Continuous run (dashboard only)',
+    severity: 'info',
+    when: 'Shown live on the Monitor once a run passes run_warn_min / run_alarm_min.',
+    evaluated: 'Every status poll (5s in the UI).',
+    cooldown_min: null,
+    email: false,
+    why: 'Answers in MINUTES what the hourly continuous rule needs six hours to say. Does NOT email ' +
+      'yet — it is a dashboard signal only.',
+    settings: ['run_gap_min', 'run_warn_min', 'run_alarm_min'],
+  },
+];
+
 module.exports = {
   sum_hours, overnight_keys,
   check_overnight, check_continuous, check_watchdog, daily_summary, current_run,
-  evaluate, status,
+  evaluate, status, ALERT_CATALOG,
 };

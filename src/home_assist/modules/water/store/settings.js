@@ -126,6 +126,12 @@ const DEFS = {
       'YEAR — there is rarely a reason to trim. The hourly rollup that every chart and leak rule ' +
       'reads is never pruned, so trimming this costs you Diagnostics detail and nothing else.',
   },
+  reception_retention_days: {
+    type: 'int', def: 14, group: 'Retention', min: 0,
+    label: 'Keep the reception log for (days)',
+    help: '0 = forever. One row per minute (1,440/day, ~10 MB a year). This is the persistent ' +
+      'record of what the radio heard, so keep enough to cover "was it working last Tuesday?".',
+  },
   alerts_retention_days: {
     type: 'int', def: 0, group: 'Retention', min: 0,
     label: 'Keep alert history for (days)',
