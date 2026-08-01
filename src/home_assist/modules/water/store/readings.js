@@ -214,6 +214,27 @@ async function packet_series(meter_id, hours, scope, limit) {
   return rows.reverse();
 }
 
+/**
+ * How many rows are ACTUALLY in the window, before the fetch limit.
+ *
+ * Needed for two separate reasons, and the second one is the important one:
+ *   - so the table can say "showing 6,000 of 20,571" instead of "6,000 rows"
+ *   - so the DECODE RATE is computed against reality. Counting the returned array instead means a
+ *     truncated 24-hour window reports 6,000 heard against 20,571 expected -- 29%, which reads as a
+ *     failing antenna when the only thing that failed is a LIMIT clause.
+ */
+async function packet_count(meter_id, hours, scope) {
+  const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
+  const where = scope === 'all' ? '' : ' AND meter_id = ' + Number(meter_id);
+  const rows = await db.query(
+    'SELECT COUNT(*) AS total, SUM(is_ours) AS ours FROM water_packets ' +
+    'WHERE heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ? SECOND)' + where,
+    [Math.round(h * 3600)]
+  );
+  const r = rows[0] || {};
+  return { total: Number(r.total || 0), ours: Number(r.ours || 0) };
+}
+
 /** Who else is out there, and how well we hear them. The antenna scoreboard. */
 async function meters_heard(hours) {
   const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
@@ -402,6 +423,6 @@ module.exports = {
   insert_reading, bump_hour, save_state, get_state, log_raw,
   prune_raw, prune_readings, prune_alerts, table_sizes,
   record_reception, reception_series, prune_reception, daily_series_range,
-  record_packets, packet_series, meters_heard, prune_packets,
+  record_packets, packet_series, packet_count, meters_heard, prune_packets,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,
 };

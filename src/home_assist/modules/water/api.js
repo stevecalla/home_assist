@@ -239,9 +239,13 @@ function mount(app) {
     const scope = req.query.meter === 'all' ? 'all' : 'mine';
     const hours = Math.max(0.05, Math.min(Number(req.query.hours) || 1, cfg.packets_retention_days * 24));
 
-    const [rows, heard] = await Promise.all([
-      readings.packet_series(cfg.meter_id, hours, scope, req.query.limit),
+    // The fetch limit is a RENDER and TRANSFER limit, not a claim about the window. Everything
+    // downstream that reasons about coverage uses `counts`, not the length of this array.
+    const LIMIT = Math.max(1, Math.min(Number(req.query.limit) || 3000, 20000));
+    const [rows, heard, counts] = await Promise.all([
+      readings.packet_series(cfg.meter_id, hours, scope, LIMIT),
       readings.meters_heard(hours),
+      readings.packet_count(cfg.meter_id, hours, scope),
     ]);
 
     const packets = rows.map(function (r) {
@@ -261,8 +265,20 @@ function mount(app) {
     });
 
     const ours = packets.filter(function (p) { return p.is_ours; });
+    const interval = rules.median_interval(ours);
     res.json({
       ok: true, tz, hours, scope,
+      // What was returned vs what is there. The UI must be able to tell the difference, or a
+      // truncated window looks like a quiet one.
+      counts: {
+        returned: packets.length,
+        window_total: counts.total,
+        window_ours: counts.ours,
+        limit: LIMIT,
+        truncated: counts.total > packets.length,
+      },
+      // Measured against the FULL window count, never against the truncated array.
+      decode: rules.decode_rate({ length: counts.ours }, interval, hours * 3600),
       meter_id: cfg.meter_id,
       enabled: !!cfg.packets_enabled,
       capture_all: !!cfg.packets_capture_all_meters,
@@ -271,8 +287,8 @@ function mount(app) {
       // The expected interval is measured, not assumed. A Badger Orion is nominally ~4s, but the
       // number that matters for "how many did I miss" is what THIS endpoint actually does at THIS
       // antenna — and that is only knowable by looking.
-      interval_seconds: rules.median_interval(ours),
-      gaps: rules.gap_spans(ours, rules.median_interval(ours)),
+      interval_seconds: interval,
+      gaps: rules.gap_spans(ours, interval),
       packets: packets,
       meters: heard.map(function (m) {
         return {
@@ -492,7 +508,7 @@ const PACKET_COLUMNS = [
   { key: 'volume', label: 'Volume', align: 'center', type: 'num',
     help: 'The lifetime odometer exactly as transmitted, before gallons_per_unit is applied. The same number as the dial in the pit.' },
   { key: 'delta', label: 'Delta', align: 'center', type: 'delta',
-    help: 'Change since this meter previous packet. Blank is the NORMAL case: the endpoint re-broadcasts the same total every few seconds and only steps when a whole gallon has passed.' },
+    help: 'Change since this meter previous packet. A faint 0 is the NORMAL case and means the odometer did not move -- the endpoint re-broadcasts the same total every few seconds and only steps when a whole gallon has passed, which at a running tap is roughly once a minute and when nothing is running is never. A blue +1 marks the packet where a gallon landed. An em dash means no previous packet to compare against, so the first row after a collector restart always shows one.' },
   { key: 'flags_1', label: 'Flags-1', align: 'center', type: 'num',
     help: 'Status bits from the endpoint, undecoded by rtl_433. What matters is not the value but whether it CHANGES: a constant number is simply how your endpoint reports its normal state, while a byte that suddenly starts differing is the meter signalling something -- Badger uses these for tamper, backflow and leak indications.' },
   { key: 'flags_2', label: 'Flags-2', align: 'center', type: 'num',

@@ -200,6 +200,40 @@ test('packets are flushed on their own fast timer, not on the 60-second tick', f
     'the tick must NOT be what flushes packets — that is the once-a-minute bug');
 });
 
+test('the decode rate is measured against the window, not the fetched slice', function () {
+  // The bug: the UI divided the number of ROWS IT RECEIVED by the number expected in the whole
+  // window. At 24 hours the fetch is capped well below what the radio actually heard, so a healthy
+  // antenna reported ~29% decoded — indistinguishable from genuinely losing two packets in three,
+  // which is exactly the fault this screen exists to detect. The denominator was right; the
+  // numerator was a LIMIT clause.
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const block = api.slice(api.indexOf("app.get('/api/water/packets'"), api.indexOf("// ── reception:"));
+
+  assert.match(block, /readings\.packet_count\(/, 'the endpoint must COUNT the window');
+  assert.match(block, /decode: rules\.decode_rate\(\{ length: counts\.ours \}/,
+    'decode_rate must be fed the window COUNT, not the returned array');
+  assert.match(block, /truncated: counts\.total > packets\.length/,
+    'the response must say when it returned less than the window holds');
+
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
+  assert.match(ui, /rt\.decode\.pct/, 'the UI must use the server-computed rate');
+  assert.ok(ui.indexOf('rtMine.length / rtExpected') === -1,
+    'the UI must not recompute the rate from the fetched array');
+});
+
+test('the grid caps what it paints and says what it left out', function () {
+  // 6,000 rows x 12 cells is 72,000 DOM elements — enough to make sorting stutter, for rows nobody
+  // scrolls to. Capping is correct; capping SILENTLY is the bug, because "800 rows" then reads as
+  // "that is all there was".
+  const grid = fs.readFileSync(
+    require.resolve('../../../web/src/components/DataGrid.jsx'), 'utf8');
+  assert.match(grid, /renderLimit\s*=\s*\d+/, 'the grid needs a render cap');
+  assert.match(grid, /sorted\.slice\(0, renderLimit\)/, 'the cap must actually be applied');
+  assert.match(grid, /in window/, 'the footer must report the true window size');
+  assert.match(grid, /windowNote/, 'a truncated grid must explain itself');
+});
+
 test('the collector prunes water_packets in the retention sweep', function () {
   // This table writes a row per transmission — ~21,600 a day. It is bounded by the clock, and only
   // if something actually runs the clock.

@@ -42,6 +42,18 @@ const DAY_CHIPS = [7, 30, 90, 365];
 // Minutes, for the Real time tab. 15 minutes is about 225 transmissions — enough to see the shape
 // of the last few gallons without the packet lane becoming a solid block.
 const RT_CHIPS = [{ m: 15, label: '15m' }, { m: 60, label: '1h' }, { m: 360, label: '6h' }, { m: 1440, label: '24h' }];
+// At ~4 seconds a packet: 15m is ~215 rows, 1h ~860, 6h ~5,100, 24h ~20,600.
+//
+// TWO independent controls, because they answer different questions and conflating them is what
+// made "why only 200 rows?" a reasonable thing to ask:
+//
+//   the RANGE chips  how far BACK to look          — 15m saw ~215 rows because that is 15 minutes
+//   the ROWS chips   how many of that to LOAD      — the cap on fetching and painting
+//
+// The row counts are a ladder rather than a free number: past a few thousand the browser, not the
+// database, is the limit, and a text box inviting "50000" would invite a frozen tab.
+const RT_ROW_CHIPS = [200, 500, 2000, 10000];
+const RT_ROWS_DEFAULT = 500;
 const RT_MS = 4000;         // matched to the meter's transmit cadence — a new row per poll
 
 const MODE_TITLE = {
@@ -75,6 +87,7 @@ export default function Monitor() {
   const [meter, setMeter] = useState(null);
   const [rt, setRt] = useState(null);
   const [rtMin, setRtMin] = useState(15);
+  const [rtRowLimit, setRtRowLimit] = useState(RT_ROWS_DEFAULT);
   const [rtScope, setRtScope] = useState('mine');
   const [tail, setTail] = useState([]);
   // A 1-second tick, used only to age the "last packet" counter. The data poll stays at 5s — this
@@ -157,9 +170,9 @@ export default function Monitor() {
 
   const loadRealtime = useCallback(async () => {
     if (mode !== 'realtime') return;
-    const r = await api.waterPackets({ hours: (rtMin / 60).toFixed(4), meter: rtScope, limit: 6000 });
+    const r = await api.waterPackets({ hours: (rtMin / 60).toFixed(4), meter: rtScope, limit: rtRowLimit });
     if (r.status === 200 && r.body.ok) setRt(r.body);
-  }, [mode, rtMin, rtScope]);
+  }, [mode, rtMin, rtScope, rtRowLimit]);
 
   const loadSeries = useCallback(async () => {
     if (mode === 'realtime') return;
@@ -267,7 +280,11 @@ export default function Monitor() {
   const rtRows = rtGrid.map((r) => rtCols.map((c) => r[c.key]));
   const rtSecs = Math.max(1, rtMin * 60);
   const rtExpected = rt && rt.interval_seconds ? Math.round(rtSecs / rt.interval_seconds) : 0;
-  const rtDecodePct = rtExpected ? Math.min(100, (rtMine.length / rtExpected) * 100) : null;
+  // From the server's COUNT over the whole window, never from the fetched array. Dividing a
+  // truncated 24-hour fetch by a full 24-hour expectation reported 29% and looked like a failing
+  // antenna; the only thing failing was a LIMIT clause.
+  const rtDecodePct = rt && rt.decode ? Math.min(100, rt.decode.pct) : null;
+  const rtCounts = rt && rt.counts ? rt.counts : null;
   const rtLastSnr = (() => {
     const withSnr = rtMine.filter((p) => p.snr !== null && p.snr !== undefined).slice(-20);
     return withSnr.length ? withSnr.reduce((a, p) => a + p.snr, 0) / withSnr.length : null;
@@ -397,6 +414,17 @@ export default function Monitor() {
                 <button key={c.m} type="button"
                         className={'w-chip' + (rtMin === c.m ? ' on' : '')}
                         onClick={() => setRtMin(c.m)}>{c.label}</button>
+              ))}
+              <span className="w-range-label" style={{ marginLeft: 6 }}>rows</span>
+              {RT_ROW_CHIPS.map((n) => (
+                <button key={'r' + n} type="button"
+                        className={'w-chip' + (rtRowLimit === n ? ' on' : '')}
+                        title={n >= 10000
+                          ? 'Everything in the window, up to 10,000. Sorting and scrolling get slower — the browser is the limit here, not the database.'
+                          : 'Load and paint up to ' + n.toLocaleString() + ' of the newest transmissions in this window'}
+                        onClick={() => setRtRowLimit(n)}>
+                  {n >= 10000 ? 'max' : n.toLocaleString()}
+                </button>
               ))}
               {/* A display filter. What gets CAPTURED is packets_capture_all_meters in Settings —
                   flipping this never changes what is stored. */}
@@ -564,6 +592,23 @@ export default function Monitor() {
                 initialSort={null}
                 live
                 rowNumbers
+                paginate
+                initialPageSize={100}
+                // Frozen through the meter column: position, when, and whose. Those three are what
+                // every other column is read AGAINST, so they are the ones that must not scroll
+                // away when you go looking at signal.
+                freezeCols={2}
+                freezeWidths={[132, 138]}
+                renderLimit={rtRowLimit}
+                windowTotal={rtCounts ? rtCounts.window_total : undefined}
+                windowNote={rtCounts && rtCounts.truncated
+                  ? 'Showing the most recent ' + rtCounts.returned.toLocaleString() + ' of ' +
+                    rtCounts.window_total.toLocaleString() + ' transmissions in this window — the ' +
+                    'newest end, which is the live one. Raise ' + String.fromCharCode(8220) + 'rows' +
+                    String.fromCharCode(8221) + ' above for more, narrow the range for full coverage, ' +
+                    'or use ⬇ CSV for every row. The decoded % is measured against the whole window, ' +
+                    'not this slice.'
+                  : undefined}
                 liveLabel="new transmissions"
                 filterPlaceholder="Filter — try a meter id, CRC, or a volume"
                 renderCell={renderPacketCell(rt && rt.quality, status.meter_id)}
@@ -853,8 +898,15 @@ function renderPacketCell(quality, myMeter) {
       case 'num':
         return Number(value).toLocaleString();
       case 'delta': {
+        // THREE states, drawn differently, because two of them were being collapsed into one.
+        //   null  no previous packet from this meter yet — genuinely unknown
+        //   0     the odometer did not move: the normal case, and NOT missing data
+        //   +n    a whole gallon (or more) passed since the last transmission
+        // Rendering 0 as an em dash made an entire column of correct zeroes look like a broken
+        // feature. A faint 0 says "measured, and it was zero", which is a different claim.
         const n = Number(value);
-        if (!n) return <span className="muted">—</span>;
+        if (!Number.isFinite(n)) return <span className="muted">—</span>;
+        if (n === 0) return <span className="w-delta-zero">0</span>;
         return <span style={{ color: 'var(--w-series)', fontWeight: 700 }}>{n > 0 ? '+' : ''}{n}</span>;
       }
       case 'freq':

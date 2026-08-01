@@ -15,6 +15,14 @@
   --w-grid:          #e1e0d9;
   --w-axis:          #898781;
 
+  /* Row backgrounds are SOLID, never translucent. A frozen column is position:sticky, and a
+     translucent cell lets the rows sliding underneath show straight through it — which is what
+     makes a frozen column look broken rather than absent. */
+  --w-row-bg:        #ffffff;
+  --w-row-mine:      #f3faf3;
+  --w-row-hover:     #eaf2fc;
+  --w-row-flash:     #fde4e4;   /* a new arrival, briefly */
+
   --w-good:          #0ca30c;
   --w-warning:       #fab219;
   --w-serious:       #ec835a;
@@ -28,6 +36,11 @@
   --w-nodata:        rgba(148, 163, 184, .20);
   --w-grid:          #2c2c2a;
   --w-axis:          #898781;
+
+  --w-row-bg:        #111a2e;
+  --w-row-mine:      #15251f;
+  --w-row-hover:     #16233c;
+  --w-row-flash:     #38191c;
 }
 
 /* ── status banner ─────────────────────────────────────────────────────── */
@@ -619,10 +632,13 @@
 .w-grid-table td.align-center { text-align: center; }
 .w-grid-table td.align-left { text-align: left; }
 .w-grid-table td.align-right { text-align: right; }
-.w-grid-table tbody tr:hover td { background: var(--w-series-soft); }
+.w-grid-table tbody tr        { --w-row: var(--w-row-bg); }
+.w-grid-table tbody tr.is-mine  { --w-row: var(--w-row-mine); }
+.w-grid-table tbody tr:hover    { --w-row: var(--w-row-hover); }
 .w-grid-table tbody tr.is-other td { color: var(--w-axis); }
-.w-grid-table tbody tr.is-mine td { background: rgba(12, 163, 12, .06); }
-.w-grid-table tbody tr.is-mine:hover td { background: var(--w-series-soft); }
+/* EVERY cell paints an opaque background, not just the frozen ones — one rule, and the frozen
+   column can never be the odd one out. */
+.w-grid-table tbody td { background: var(--w-row); }
 .w-grid-empty { text-align: center; padding: 22px 0; color: var(--muted); }
 .w-mono { font-variant-numeric: tabular-nums; }
 .w-id-mine { font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
@@ -686,11 +702,16 @@
 
 /* A row that just landed. One shot — a row that arrives, is read, and stays must stop
    announcing itself, or the whole table reads as permanently new. */
+/* A new arrival, in light red. Red rather than green on purpose: this is not a "success", it is
+   "the list you were reading just changed underneath you" — the same register as the pill and the
+   paused-page notice. It resolves to the row's own colour, so a frozen cell stays opaque
+   throughout the animation. */
 @keyframes w-row-in {
-  0%   { background: rgba(12, 163, 12, .30); }
-  100% { background: transparent; }
+  0%   { background-color: var(--w-row-flash); }
+  70%  { background-color: var(--w-row-flash); }
+  100% { background-color: var(--w-row); }
 }
-.w-grid-table tbody tr.is-new td { animation: w-row-in 1.4s ease-out; }
+.w-grid-table tbody tr.is-new td { animation: w-row-in 1.6s ease-out; }
 
 @media (prefers-reduced-motion: reduce) {
   .w-grid-live i, .w-grid-table tbody tr.is-new td { animation: none; }
@@ -705,3 +726,67 @@
 th.w-grid-num { padding: 6px 8px; }
 .w-grid-th.as-static { cursor: help; }
 .w-grid-table tbody tr:hover td.w-grid-num { color: var(--ink); }
+
+/* What the grid is NOT showing. Amber rather than red: a truncated view is a limit, not a fault. */
+.w-grid-note {
+  font-size: 11.5px; color: var(--muted); margin: 0 0 7px;
+  padding: 5px 10px; border-left: 3px solid var(--w-warning);
+  background: var(--bg); border-radius: 0 6px 6px 0;
+}
+
+/* ── pagination ──────────────────────────────────────────────────────────────
+   Below the table, not above it: you decide to turn the page after reading one,
+   so the control belongs where your eye finishes. */
+.w-page-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px; font-size: 11.5px;
+}
+.w-page-bar > button {
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 3px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted);
+}
+.w-page-bar > button:hover:not(:disabled) { color: var(--ink); border-color: var(--w-series); }
+.w-page-bar > button:disabled { opacity: .38; cursor: default; }
+.w-page-of { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.w-page-in {
+  font: inherit; font-size: 11.5px; width: 52px; text-align: center;
+  padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.w-page-size { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; }
+.w-page-size .w-chip { padding: 2px 8px; }
+
+/* Page 1 is the live edge; every other page is history and holds still. Saying which you are on
+   beats letting someone wonder why page 4 stopped updating. */
+.w-page-live { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 2px 9px; border-radius: 999px; }
+.w-page-live.on  { color: var(--w-good); border: 1px solid var(--w-good); }
+.w-page-live.off { color: var(--w-warning); border: 1px solid var(--w-warning); }
+
+/* A measured zero, not a missing value. Faint enough to recede, present enough to prove the column
+   is working — an em dash here made a column of correct zeroes look like a broken feature. */
+.w-delta-zero { color: var(--w-axis); opacity: .55; }
+
+
+/* ── frozen columns ──────────────────────────────────────────────────────────
+   Position, time and meter stay put while the signal columns scroll under them.
+   The edge column carries a shadow so the seam is visible rather than implied. */
+.w-grid-table th.is-frozen { z-index: 4; background: var(--panel); }
+.w-grid-table td.is-frozen { z-index: 1; }
+.w-grid-table th.is-frozen-edge,
+.w-grid-table td.is-frozen-edge { box-shadow: 6px 0 6px -6px rgba(0, 0, 0, .28); }
+.w-grid-table th.is-frozen-edge::after,
+.w-grid-table td.is-frozen-edge::after {
+  content: ''; position: absolute; top: 0; right: 0; bottom: 0;
+  width: 1px; background: var(--line);
+}
+.w-grid-table td.is-frozen-edge, .w-grid-table th.is-frozen-edge { position: sticky; }
+
+/* Reset. Present but disabled when there is nothing to undo — a control that vanishes when idle
+   is a control you have to rediscover. */
+.w-grid-reset {
+  font: inherit; font-size: 11px; padding: 2px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); color: var(--muted);
+}
+.w-grid-reset:disabled { opacity: .35; cursor: default; }
+.w-grid-reset.is-dirty { color: var(--w-series); border-color: var(--w-series); }
