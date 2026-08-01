@@ -1,0 +1,128 @@
+# =========================================================
+# ENV FILES / SECRETS
+# =========================================================
+
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.envrc
+
+# Generic secrets / certs
+*.pem
+*.key
+*.crt
+*.p12
+secrets.json
+
+# Runtime auth data lives OUTSIDE the repo (see src/home_assist/data_dir.js), but ignore
+# any stray copies just in case.
+auth.json
+panel_access.json
+
+# =========================================================
+# NOTES / TEMP
+# =========================================================
+
+notes.txt
+notes.md
+*.bak
+*.tmp
+*.tgz
+
+# menu.js per-user preference (show/hide CLI commands)
+.menu_prefs.json
+src/home_assist/.menu_prefs.json
+
+# =========================================================
+# CAPTURED RADIO DATA (can be large; keep the sample committed)
+# =========================================================
+
+data/
+*.jsonl
+!src/home_assist/modules/water/collector/fixtures/*.jsonl
+*.csv
+
+# =========================================================
+# NODE / PACKAGE MANAGERS / BUILD
+# =========================================================
+
+node_modules/
+jspm_packages/
+bower_components/
+.pnp/
+.pnp.js
+dist/
+build/
+out/
+.cache/
+.parcel-cache/
+.vite/
+coverage/
+.nyc_output
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# =========================================================
+# LOGS / PIDS
+# =========================================================
+
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# =========================================================
+# DATABASES (we use MySQL; ignore stray local files)
+# =========================================================
+
+*.sqlite
+*.sqlite3
+*.db
+
+# =========================================================
+# TESTING
+# =========================================================
+
+test-results/
+playwright-report/
+playwright/.cache/
+
+# =========================================================
+# EDITORS / IDE
+# =========================================================
+
+.vscode/
+.vscode-test/
+.idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
+*.code-workspace
+*~
+*.swp
+.*.sw?
+
+# =========================================================
+# OS
+# =========================================================
+
+.DS_Store
+.DS_Store?
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini

@@ -1,0 +1,22 @@
+{
+  "name": "home-assist-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Vite + React front-end for the home_assist platform shell (served by server_home_assist_8050.js). The shell hosts feature modules — water is the first — listed in src/nav.js.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "home_assist": "file:../../..",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  }
+}
