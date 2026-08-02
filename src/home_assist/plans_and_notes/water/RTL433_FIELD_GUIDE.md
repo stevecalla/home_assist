@@ -29,6 +29,15 @@ forget. Prefer them to typing `rtl_433` by hand.
 | Signal figures | `npm run water_listen_signal` | 915.650 – 917.250 | per-packet rssi/snr/freq + running mean |
 | Protocol 223 present? | `npm run water_rtl_check` | — | no dongle needed |
 
+And three that use `rtl_fm` rather than `rtl_433`, for analogue audio:
+
+| Menu | Command | What it does |
+|---|---|---|
+| Listen — FM radio 98.5 | `npm run water_fm` | plays on **this machine's** speakers |
+| Listen — AM / airband 124.0 | `npm run water_am` | narrowband AM — aviation, *not* AM broadcast |
+| **Listen — NOAA weather** | `npm run water_weather` | continuous voice forecast, 162.550 |
+| Record 30s of FM to a .wav | `npm run water_fm_record` | for when you are on the server remotely |
+
 The rest of this file is the native commands underneath, for when you want to go off-menu.
 
 ---
@@ -364,6 +373,158 @@ Observed 2026-08-01 at `-f 915M -s 1024k`:
 The neighbour's weather station is worth knowing about: when you move the antenna, a signal at a
 fixed distance that you did not move is the control. If your SNR rises and theirs does not, you
 improved *your* path. If both rise, you improved the receiver.
+
+---
+
+## The same dongle, listening to analogue radio
+
+Nothing to do with water, and — being honest about it — **not a tool you will reach for.** It is
+recorded here so that the next person to wonder "can this thing receive FM?" gets an answer in one
+minute instead of an afternoon.
+
+The intended value was a hardware smoke test: hearing music proves the dongle enumerated, the
+blacklist held, the driver loaded, USB is delivering samples and the tuner tunes. All true. But
+**98.5 MHz is not 916 MHz.** It says nothing about the antenna's performance at 915, which is where
+every real reception problem actually lives, so it eliminates only the branches that were already
+least likely.
+
+| Test | Proves | At the frequency that matters? |
+|---|---|---|
+| `rtl_test` | dongle enumerates, samples flow | no |
+| **`npm run water_listen_nearby`** | all of the above, **plus** the antenna at 915, **plus** the decoder | **yes** |
+| `npm run water_fm` | all of the above, audibly | no |
+
+**The neighbourhood survey is the better diagnostic.** FM is the more visceral one. Reach for the
+survey first and treat this section as a curiosity — unless you are chasing something where hearing
+it genuinely helps, or you want to know whether a second dongle would be worth buying (see the note
+on weather radio at the end).
+
+```
+npm run water_fm            # 98.5 MHz, FM broadcast
+npm run water_am            # 124.0 MHz, civil airband
+npm run water_weather       # 162.550 MHz, NOAA Weather Radio
+npm run water_fm_record     # 30 seconds to a .wav
+```
+
+Off-menu, with a frequency:
+
+```
+node src/home_assist/modules/water/audio.js fm 91.5
+node src/home_assist/modules/water/audio.js weather 162.475
+node src/home_assist/modules/water/audio.js nfm 146.940
+node src/home_assist/modules/water/audio.js am 121.5 --record 60
+```
+
+Four modes, and the difference between them is entirely **how wide the window is and which
+demodulator runs**:
+
+| Mode | Demod | Window | For |
+|---|---|---|---|
+| `fm` | wideband FM | 200 kHz | broadcast radio, 88.1 – 107.9 |
+| `am` | AM | 12 kHz | civil airband, 108 – 137 |
+| `nfm` | narrowband FM | 32 kHz | any VHF narrowband, 136 – 174 |
+| `weather` | narrowband FM | 32 kHz | NOAA, and it knows the channel list |
+
+### It is a different binary
+
+`rtl_433` is a **packet decoder**. It has no audio path at all — there is no flag that makes it play
+sound, because demodulating an analogue carrier is a different job from finding OOK/FSK bursts and
+checking their CRC. Analogue is `rtl_fm`, which ships in the same `rtl-sdr` package that gives you
+`rtl_test`:
+
+```
+sudo apt install rtl-sdr
+```
+
+Same dongle, so the same one-owner rule applies. The wrapper stops the collector and restarts it.
+
+### Bandwidth, again
+
+```
+rtl_fm -f 98.5M -M wbfm -s 200000 -r 48000 -
+                        └ 200 kHz — the width of an FM broadcast channel
+```
+
+The `-s` here is the same idea as `-s` on `rtl_433`: **set the window to match the signal.** An FM
+broadcast channel occupies about 200 kHz, so that is what you ask for. AM voice needs about 8 kHz of
+audio, so the `am` mode uses a 12 kHz window — wide enough for the signal, narrow enough to keep the
+adjacent channel out. `-r` is separate: the audio sample rate coming out the other end.
+
+### "AM" does not mean your AM station
+
+| Band | Frequencies | Reachable? |
+|---|---|---|
+| AM **broadcast** | 0.53 – 1.7 MHz | **No.** Far below the tuner's ~24 MHz floor |
+| Civil **airband** (still AM) | 108 – 137 MHz | Yes — this is what the `am` mode is for |
+| FM broadcast | 88.1 – 107.9 MHz | Yes |
+| Tuner's usable span | ~24 – 1766 MHz | — |
+
+An R820T simply cannot go below about 24 MHz. Receiving the AM broadcast band needs a
+direct-sampling hardware modification or an upconverter, and no combination of flags substitutes for
+either. The `am` mode refuses a frequency below the floor and says why, rather than tuning somewhere
+meaningless and producing hiss.
+
+Expect long silences on airband. Aviation is not continuous transmission; that is what it sounds
+like when it is working.
+
+### Hearing it when you are not there
+
+**Audio plays out of the sound card on the machine holding the dongle.** If you are RDP'd or SSH'd
+into the Ubuntu box, that is a speaker in another room. RDP does not carry audio by default and
+making it do so on Ubuntu means building the `pulseaudio-module-xrdp` bridge — a lot of work for a
+diagnostic.
+
+So don't stream it. **Record it:**
+
+```
+node src/home_assist/modules/water/audio.js fm 98.5 --record 30
+```
+
+Writes a plain `.wav` into `<data dir>/captures/audio/` and prints the `scp` line to fetch it. Play
+it on whatever you are actually sitting in front of.
+
+The header is written in Node — no `ffmpeg`, no `sox`, no `aplay`. `rtl_fm` already emits signed
+16-bit little-endian mono, which is exactly what sits after a `.wav` header, so the entire conversion
+is 44 bytes of prefix and two length fields patched when the recording stops. A diagnostic that needs
+three packages installed before it runs is not a diagnostic.
+
+For live playback the wrapper looks for `aplay`, then `ffplay`, then `play` (sox), and tells you what
+to install if it finds none. `WATER_AUDIO_PLAYER` overrides it; `{rate}` is substituted.
+
+### NOAA Weather Radio — the one worth having
+
+```
+npm run water_weather
+```
+
+**A real broadcast, not a data feed.** Continuous synthesised voice, 24/7, reading current
+conditions, forecasts and warnings for the local area on a loop. You listen to it exactly like a
+station. Layered on top of that voice are a 1050 Hz alarm tone and SAME digital headers — event
+type, affected counties, expiry — which is the machine-readable half and what dedicated weather
+radios trigger on.
+
+It is narrowband FM, which is why it needed a third mode: `fm` is wideband at 200 kHz and
+demodulates a 25 kHz NOAA channel as faint hiss, and `am` is the wrong demodulator entirely. Both
+would have sounded like bad reception rather than like a wrong setting.
+
+**Seven channels, and only one or two will reach any given house:**
+
+```
+162.400   162.425   162.450   162.475   162.500   162.525   162.550
+```
+
+The mode prints the list and highlights the one it is on. Try each; the right one is unmistakable —
+a voice reading the forecast. There is no scanning to do beyond that, because every NWR transmitter
+in the country uses one of these seven and nothing else.
+
+Why it belongs in a leak monitor's repo at all: flash-flood warning and leak detection are the same
+job. Know before the basement does. And it keeps working when the internet does not, which is
+exactly the scenario where a phone alert will not reach you.
+
+**What it is not, yet:** an alerting path. Decoding SAME headers and emailing on a warning would
+mean holding the dongle full time, and the dongle is spoken for by the collector. That is a
+second-dongle decision rather than a software one — $25 ends the conflict and both radios run
+permanently.
 
 ---
 

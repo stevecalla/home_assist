@@ -261,7 +261,7 @@ counter covers that case and turns red, which is the more visible place for it.
 
 ## Listening to the radio directly (2026-08-02)
 
-Menu section **RADIO — listen to it yourself** (items 11-16), backed by
+Menu section **RADIO — listen to it yourself** (items 11-20), backed by
 `modules/water/listen.js` and documented in `RTL433_FIELD_GUIDE.md` in this folder.
 
 | Item | Window (MHz) | Hears |
@@ -285,6 +285,20 @@ Three decisions worth keeping:
   13 hops, so any one slice is heard 8% of the time and absence proves nothing. Hops are spaced
   2 MHz for a 2.4 MHz window so the joins overlap rather than landing on the filter rolloff. Tests
   pin both ends of the band and the minimum overlap.
+- **Analogue audio is a separate script** (`modules/water/audio.js`, items 16-18). Different binary
+  -- `rtl_fm`, not `rtl_433`, which has no audio path at all. It is here because hearing a local FM
+  station is the most convincing proof the dongle, USB path, driver and blacklist all work; a decode
+  count of zero has a dozen causes, audible silence has few. `--record N` writes a plain `.wav`,
+  header built in Node with no ffmpeg/sox/aplay dependency, because audio played on a headless box
+  comes out of a speaker in another room.
+- **`weather` is the analogue mode that earns its keep.** NOAA Weather Radio, 162.400-162.550, is a
+  continuous voice broadcast carrying severe-weather alerts and it works when the internet does not.
+  It needed a third demodulator: `fm` is wideband at 200 kHz and renders a 25 kHz NOAA channel as
+  faint hiss; `am` is wrong outright. Not an ALERTING path -- SAME decoding would mean holding the
+  dongle full time, which is a second-dongle decision, not a software one.
+- **`am` is airband, not AM broadcast.** 0.53-1.7 MHz is far below the R820T's ~24 MHz floor and
+  needs a direct-sampling mod or an upconverter. The mode refuses a frequency below the floor and
+  says why rather than tuning somewhere meaningless.
 - **No `jq`.** The signal table formats itself. jq is not on Git Bash, and a command that only runs
   on one of the two machines is not a diagnostic.
 
