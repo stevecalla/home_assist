@@ -16,7 +16,7 @@ belongs.
 
 ## The short version: use the menu
 
-Five listening positions are in `npm run home_assist_menu`, under **RADIO — listen to it yourself**.
+Six listening positions are in `npm run home_assist_menu`, under **RADIO — listen to it yourself**.
 They stop the collector, hand the dongle over, and restart it when you Ctrl-C — including if you
 forget. Prefer them to typing `rtl_433` by hand.
 
@@ -25,6 +25,7 @@ forget. Prefer them to typing `rtl_433` by hand.
 | Listen — MY meter | `npm run water_listen_meter` | 915.650 – 917.250 | your meter only, readable |
 | **Listen — the neighbourhood** | `npm run water_listen_nearby` | 914.488 – 915.512 | everything nearby **except** your meter |
 | Listen — neighbourhood + mine | `npm run water_listen_wide` | 914.800 – 917.200 | both, in one window |
+| Listen — hop the WHOLE band | `npm run water_listen_sweep` | 901.8 – 928.2, 2.4 at a time | anything in the ISM band, 8% of the time |
 | Signal figures | `npm run water_listen_signal` | 915.650 – 917.250 | per-packet rssi/snr/freq + running mean |
 | Protocol 223 present? | `npm run water_rtl_check` | — | no dongle needed |
 
@@ -78,21 +79,116 @@ rtl_433 -f 916.45M -s 1600k -R 223 -F json -M level
 
 ---
 
-## The trap that costs the most time: bandwidth
+## How bandwidth actually works
 
-**The sample rate is the bandwidth, centred on `-f`.** You hear `-f ± (rate ÷ 2)` and nothing else.
-A transmitter outside that window is not weak — it is *invisible*.
+There is no "range" setting. **The sample rate IS the bandwidth**, and it is centred on `-f`.
+
+```
+-f 915M -s 1024k
+
+      914.488 ◄────────── 1.024 MHz ──────────► 915.512
+                             ▲
+                        915.000  (the -f)
+```
+
+So the whole of it is one line of arithmetic:
+
+```
+low  = f - (s / 2)
+high = f + (s / 2)
+```
+
+### Why the full rate, not half
+
+Nyquist says a sampler at rate `fs` can represent `fs/2` of bandwidth, so `-s 1024k` ought to buy
+512 kHz. It buys 1.024 MHz because an RTL-SDR samples in **quadrature**: two streams, I and Q, 90
+degrees apart, produced by mixing the incoming signal against the tuner's local oscillator. A
+complex stream carries twice the information of a real one at the same rate, and the practical
+consequence is that the tuned frequency sits in the *middle* of the window rather than at the top.
+
+You do not need the theory. You need `f ± s/2`, and the fact that it is `s` and not `s/2`.
+
+### Why the edges are not as good as the middle
+
+The window is not a clean rectangle. The tuner's analog filter rolls off toward the edges, so a
+transmitter sitting in the outer ~10% is attenuated relative to one in the middle. It is a soft
+boundary, not a wall — which is worse than a wall, because a marginal signal at the edge decodes
+sometimes and looks like a flaky antenna.
+
+**Put what you care about in the middle.** The collector tunes 916.45 exactly, not 916.
+
+### What a dongle can and cannot do
+
+| | |
+|---|---|
+| RTL2832U hard ceiling | **3.2 Msps** — 3.2 MHz |
+| Reliable in practice | **~2.4 Msps** — above that, USB 2 starts dropping samples |
+| Valid ranges | 225–300 ksps, then 900 ksps–3.2 Msps. Nothing in between |
+| US ISM band | 902–928 MHz = **26 MHz wide** |
+| Shortfall | about **11×** |
+
+So "watch the whole 900 MHz band at once" is not a thing this hardware does. A receiver that
+genuinely covers 26 MHz in one gulp is a different and much more expensive class of device. The
+$25 dongle sees about a ninth of the band, wherever you point it.
+
+CPU is the second limit. Demodulation cost scales with sample rate, and `-s 2400k` with every
+decoder enabled will work a laptop hard. That is the other reason the collector runs narrow.
+
+### The table that stops the mistake
 
 | Command | Window (MHz) | Hears the meter at 916.45? |
 |---|---|---|
-| `-f 433.92M -s 250k` | 433.795 – 434.045 | no — wrong band |
+| `-f 433.92M -s 250k` | 433.795 – 434.045 | no — wrong band entirely |
 | `-f 915M -s 1024k` | 914.488 – 915.512 | **no** — 940 kHz short |
 | `-f 915M -s 2400k` | 913.800 – 916.200 | **no** — still 250 kHz short |
-| `-f 916M -s 2400k` | 914.800 – 917.200 | yes |
-| `-f 916.45M -s 1600k` | 915.650 – 917.250 | yes — what the collector uses |
+| `-f 916M -s 2400k` | 914.800 – 917.200 | yes, but near the edge |
+| `-f 916.45M -s 1600k` | 915.650 – 917.250 | yes, dead centre — what the collector uses |
 
-That second row is the one to remember. `-f 915M` looks like "the 915 band" and is nothing of the
-sort: 902–928 MHz is 26 MHz wide and a 1 MHz window sees 4% of it.
+Row two is the one to remember. `-f 915M` reads like "the 915 band" and is nothing of the sort:
+902–928 is 26 MHz wide and a 1 MHz window sees **4%** of it.
+
+---
+
+## Covering more than one window: hopping
+
+`rtl_433` takes **any number of `-f` positions** and `-H <seconds>` of dwell on each. That is how you
+cover ground the sample rate cannot.
+
+```
+npm run water_listen_sweep
+```
+
+Thirteen positions, 2.4 MHz each, spaced **2 MHz** so they overlap, covering 901.8–928.2 with 20
+seconds on each — a full sweep every four minutes.
+
+Two design points, both of which are easy to get wrong:
+
+- **Space the hops closer than the window is wide.** 2 MHz steps for a 2.4 MHz window gives 400 kHz
+  of overlap. Butting them edge to edge puts every join on the attenuated filter rolloff, which is
+  precisely where a signal gets missed.
+- **Start at LOW + step/2, not at LOW.** A window centred on 902 throws half of itself away below
+  the band.
+
+### The cost: duty cycle
+
+You are listening to any one slice **1/13 of the time — 8%**. This is the whole character of the
+technique and it decides what hopping is good for:
+
+| Transmits every | 20s dwell catches it? |
+|---|---|
+| ~4 s (our Orion) | yes, comfortably — several packets per visit |
+| ~60 s | usually |
+| ~5 min | mostly **no** |
+
+So **absence from a sweep proves nothing.** Hopping answers "where is there traffic", after which
+you go and listen properly on a fixed frequency. It is a discovery tool, never a monitor — and it
+holds the dongle, and therefore stops leak detection, for minutes at a time.
+
+Off-menu, by hand:
+
+```
+rtl_433 -f 903M -f 905M -f 907M -f 909M -f 911M -f 913M -f 915M -f 917M -f 919M -f 921M -f 923M -f 925M -f 927M -s 2400k -M level -H 20
+```
 
 ---
 
@@ -225,7 +321,7 @@ rtl_433 -f 916M -s 2400k -M level -F json | jq -c '{t:.time, model, id:(.id // .
 rtl_433 -f 433.92M
 ```
 
-**Hop between bands, unattended:**
+**Hop between the two bands you care about** — 433 and 915, one minute each:
 
 ```
 rtl_433 -f 433.92M -f 916.45M -H 60

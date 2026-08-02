@@ -100,6 +100,7 @@ const SECTIONS = [
     { label: 'Listen — MY meter', desc: 'The collector\'s exact tuning, readable. Answers "is the radio hearing the meter right now"', bin: 'node', args: [LISTEN, 'meter'], cli: 'node ' + LISTEN + ' meter' },
     { label: 'Listen — the neighbourhood', desc: '915M / 1024k. Everything nearby EXCEPT your meter — 916.45 is outside this window, by design', bin: 'node', args: [LISTEN, 'nearby'], cli: 'node ' + LISTEN + ' nearby' },
     { label: 'Listen — neighbourhood + mine', desc: '916M / 2400k. Both in one window, so a neighbour\'s signal works as a fixed reference for antenna moves', bin: 'node', args: [LISTEN, 'wide'], cli: 'node ' + LISTEN + ' wide' },
+    { label: 'Listen — hop the WHOLE band', desc: '902–928 MHz in 13 hops of 2.4 MHz, 20s each. Discovery only: you hear any one slice 8% of the time, and it holds the dongle for ~4 min', bin: 'node', args: [LISTEN, 'sweep'], cli: 'node ' + LISTEN + ' sweep' },
     { label: 'Signal figures (antenna work)', desc: 'Per-packet rssi/snr/freq in a table, with a running mean. What to watch while moving the aerial', bin: 'node', args: [LISTEN, 'signal'], cli: 'node ' + LISTEN + ' signal' },
     { label: 'Is protocol 223 in this build?', desc: 'rtl_433 -R help, filtered to Orion. No dongle needed, does not touch the collector', bin: 'node', args: [LISTEN, 'check'], cli: 'node ' + LISTEN + ' check' },
   ]},

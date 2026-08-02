@@ -21,6 +21,7 @@
     "water_listen_meter": "node src/home_assist/modules/water/listen.js meter",
     "water_listen_nearby": "node src/home_assist/modules/water/listen.js nearby",
     "water_listen_wide": "node src/home_assist/modules/water/listen.js wide",
+    "water_listen_sweep": "node src/home_assist/modules/water/listen.js sweep",
     "water_listen_signal": "node src/home_assist/modules/water/listen.js signal",
     "water_rtl_check": "node src/home_assist/modules/water/listen.js check",
     "water_collector_dev": "nodemon --watch collector_water.js --watch src/home_assist/modules/water --ext js collector_water.js",

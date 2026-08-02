@@ -261,7 +261,7 @@ counter covers that case and turns red, which is the more visible place for it.
 
 ## Listening to the radio directly (2026-08-02)
 
-Menu section **RADIO — listen to it yourself** (items 11-15), backed by
+Menu section **RADIO — listen to it yourself** (items 11-16), backed by
 `modules/water/listen.js` and documented in `RTL433_FIELD_GUIDE.md` in this folder.
 
 | Item | Window (MHz) | Hears |
@@ -269,6 +269,7 @@ Menu section **RADIO — listen to it yourself** (items 11-15), backed by
 | Listen — MY meter | 915.650 - 917.250 | our meter only, readable console |
 | Listen — the neighbourhood | 914.488 - 915.512 | everything nearby EXCEPT ours -- deliberately |
 | Listen — neighbourhood + mine | 914.800 - 917.200 | both, for antenna comparisons |
+| Listen — hop the WHOLE band | 901.8 - 928.2, 2.4 at a time | discovery sweep, 13 hops x 20s, ~4 min |
 | Signal figures | 915.650 - 917.250 | per-packet rssi/snr/freq + running mean, formatted in Node |
 | Protocol 223 present? | -- | `-R help`, no dongle needed |
 
@@ -280,6 +281,10 @@ Three decisions worth keeping:
 - **The narrow survey is a feature.** `-f 915M -s 1024k` cannot reach 916.45, so traffic on it
   proves dongle, driver, USB and antenna are all fine while our meter is silent. A test pins the
   window below the meter so nobody "fixes" it.
+- **The sweep is discovery, not monitoring.** 26 MHz of ISM band against a 2.4 Msps ceiling means
+  13 hops, so any one slice is heard 8% of the time and absence proves nothing. Hops are spaced
+  2 MHz for a 2.4 MHz window so the joins overlap rather than landing on the filter rolloff. Tests
+  pin both ends of the band and the minimum overlap.
 - **No `jq`.** The signal table formats itself. jq is not on Git Bash, and a command that only runs
   on one of the two machines is not a diagnostic.
 

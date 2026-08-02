@@ -57,6 +57,31 @@ test('no listening mode passes -M freq', function () {
   }
 });
 
+test('the sweep covers the whole ISM band, with overlapping windows', function () {
+  // The point of the sweep is that no part of 902-928 is unreachable. Two ways to get that wrong:
+  // leave a hole at an end, or space the hops at exactly the window width so the joins land on the
+  // attenuated filter edges. Both are invisible until something you were looking for is missed.
+  const hops = listen.hop_centres();
+  const half = listen.SWEEP_RATE_KHZ / 1000 / 2;
+
+  assert.ok(hops[0] - half <= listen.SWEEP_LOW_MHZ, 'bottom of the band is not covered');
+  assert.ok(hops[hops.length - 1] + half >= listen.SWEEP_HIGH_MHZ, 'top of the band is not covered');
+
+  for (let i = 1; i < hops.length; i += 1) {
+    const overlap = (hops[i - 1] + half) - (hops[i] - half);
+    assert.ok(overlap > 0, 'gap between hop ' + hops[i - 1] + ' and ' + hops[i]);
+    assert.ok(overlap >= 0.3, 'joins must overlap by more than the filter rolloff, got ' + overlap.toFixed(3));
+  }
+});
+
+test('the sweep asks for -M level so you can tell WHERE a hit landed', function () {
+  // Without frequency metadata a hopping scan tells you a device exists and not where it lives,
+  // which is the only question the sweep is asked.
+  assert.match(listen.MODES.sweep.args, /-M level/);
+  assert.ok(/-f /.test(listen.MODES.sweep.args), 'sweep must pass explicit -f positions');
+  assert.match(listen.MODES.sweep.args, /-H \d+/, 'multiple -f without -H never actually hops');
+});
+
 test('menu item numbers are unique', function () {
   // Numbers are assigned by position now. This is the regression that change prevents: inserting a
   // section used to mean renumbering by hand, and a duplicate id makes one item unreachable.

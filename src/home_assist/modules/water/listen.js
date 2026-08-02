@@ -5,6 +5,7 @@
  *   node src/home_assist/modules/water/listen.js meter     # is MY meter decoding right now
  *   node src/home_assist/modules/water/listen.js nearby    # everything nearby EXCEPT my meter
  *   node src/home_assist/modules/water/listen.js wide      # nearby AND my meter
+ *   node src/home_assist/modules/water/listen.js sweep     # hop the whole 902-928 band (discovery)
  *   node src/home_assist/modules/water/listen.js signal    # per-packet rssi/snr for antenna work
  *   node src/home_assist/modules/water/listen.js check     # is protocol 223 even in this build
  *
@@ -42,6 +43,40 @@ const c = (color, t) => `${color}${t}${RESET}`;
 const PM2_NAME = 'water_collector';
 
 /**
+ * The band sweep.
+ *
+ * 902-928 MHz is the US ISM band, 26 MHz wide. A dongle cannot see it at once: the RTL2832U tops
+ * out at 3.2 Msps and only ~2.4 Msps runs without dropping samples on USB 2, so the widest honest
+ * window is about a ninth of the band. The answer is to HOP -- rtl_433 takes any number of -f
+ * positions and -H seconds of dwell on each.
+ *
+ * STEP is 2 MHz while the window is 2.4 MHz, on purpose. The outer edges of a tuned window are
+ * attenuated by the analog filter rolloff, so butting windows up edge-to-edge leaves weak seams
+ * exactly where a transmitter is most likely to be missed. The 400 kHz overlap costs one extra hop
+ * and buys clean joins.
+ *
+ * The first centre is LOW + STEP/2, not LOW: a window centred on 902 would waste half of itself
+ * below the band. Starting at 903 puts the bottom edge at 901.8, just under the band floor.
+ */
+const SWEEP_LOW_MHZ = 902;
+const SWEEP_HIGH_MHZ = 928;
+const SWEEP_RATE_KHZ = 2400;
+const SWEEP_STEP_MHZ = 2;
+const SWEEP_DWELL_S = 20;
+
+function hop_centres() {
+  const out = [];
+  for (let f = SWEEP_LOW_MHZ + SWEEP_STEP_MHZ / 2; f < SWEEP_HIGH_MHZ; f += SWEEP_STEP_MHZ) {
+    out.push(Number(f.toFixed(3)));
+  }
+  return out;
+}
+
+const SWEEP_HOPS = hop_centres();
+const SWEEP_ARGS = SWEEP_HOPS.map((f) => '-f ' + f + 'M').join(' ') +
+  ' -s ' + SWEEP_RATE_KHZ + 'k -M level -H ' + SWEEP_DWELL_S;
+
+/**
  * The listening positions.
  *
  * `window` is not decoration. The sample rate IS the bandwidth: `-f X -s R` hears X +/- R/2 and
@@ -74,6 +109,20 @@ const MODES = {
     blurb: 'The comparison view. A neighbour\'s transmitter you did not move is a fixed reference:\n' +
            '  if your SNR rises and theirs does not, you improved YOUR path. If both rise, you\n' +
            '  improved the receiver.',
+  },
+  sweep: {
+    label: 'Hop the whole band',
+    args: SWEEP_ARGS,
+    window: SWEEP_RATE_KHZ / 1000 + ' MHz at a time, ' + SWEEP_HOPS.length + ' positions covering ' +
+      SWEEP_LOW_MHZ + ' - ' + SWEEP_HIGH_MHZ + ' MHz',
+    hears: 'anything in the ISM band -- eventually. One slice at a time, never all at once',
+    hops: SWEEP_HOPS,
+    blurb: 'DISCOVERY ONLY. You are listening to any given slice ' + (1 / SWEEP_HOPS.length * 100).toFixed(0) +
+      '% of the time, so\n' +
+      '  absence here proves nothing. A full sweep takes ' + Math.round(SWEEP_HOPS.length * SWEEP_DWELL_S / 60) +
+      ' minutes and the collector is stopped\n' +
+      '  throughout. Use it to find out WHERE traffic is, then go listen there properly.',
+    warn: 'This holds the dongle for minutes at a time. Leak detection is off for all of it.',
   },
   signal: {
     label: 'Signal figures (antenna work)',
@@ -174,8 +223,18 @@ function print_header(key, mode, cmd) {
   console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
   console.log('  window  ' + c(BOLD, mode.window));
   console.log('  hears   ' + mode.hears);
+  if (mode.hops) {
+    // The hop plan is printed as edges, not centres, because the edges are what answer the only
+    // question that matters here: "would this have heard X?"
+    const half = SWEEP_RATE_KHZ / 1000 / 2;
+    console.log('  hops    ' + c(DIM, mode.hops.map((f) => f + 'M').join('  ')));
+    console.log('  covers  ' + c(DIM, (mode.hops[0] - half).toFixed(1) + ' - ' +
+      (mode.hops[mode.hops.length - 1] + half).toFixed(1) + ' MHz, ' + SWEEP_DWELL_S + 's on each, ' +
+      'full sweep every ' + Math.round(mode.hops.length * SWEEP_DWELL_S / 60) + ' min'));
+  }
   console.log('');
   console.log('  ' + mode.blurb);
+  if (mode.warn) console.log('\n  ' + c(YELLOW, mode.warn));
   console.log('');
   console.log(c(DIM, '  $ ' + cmd + ' ' + mode.args));
   console.log('');
@@ -286,4 +345,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { MODES, pm2_state };
+module.exports = { MODES, pm2_state, hop_centres, SWEEP_LOW_MHZ, SWEEP_HIGH_MHZ, SWEEP_RATE_KHZ };
