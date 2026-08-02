@@ -550,7 +550,7 @@ const PACKET_COLUMNS = [
   { key: 'noise', label: 'Noise', align: 'center', type: 'num', unit: 'dBm',
     help: 'The noise floor when this packet arrived. Rising noise with unchanged RSSI means new interference nearby, not a weaker meter.' },
   { key: 'freq_mhz', label: 'Freq', align: 'center', type: 'freq', unit: 'MHz',
-    help: 'Where the packet actually landed. Requires -M freq in WATER_RTL433_ARGS -- -M level alone gives rssi/snr/noise and no frequency, so this column stays blank without it. The Orion is fixed at 916.45 MHz; drift beyond about 0.01 MHz across many packets suggests the dongle crystal wants a PPM correction.' },
+    help: 'Where the packet actually landed. Needs -M level in WATER_RTL433_ARGS, the same flag that supplies rssi/snr/noise -- one flag adds Modulation, Frequency, RSSI, SNR and Noise together. (There is no -M freq; it is not a valid value and passing it suppresses the whole set.) The Orion is fixed at 916.45 MHz; drift beyond about 0.01 MHz across many packets suggests the dongle crystal wants a PPM correction.' },
 ];
 
 function packets_sql(meter_id, hours, scope) {

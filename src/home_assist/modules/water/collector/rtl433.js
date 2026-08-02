@@ -22,14 +22,20 @@ const { createInterface } = require('readline');
 const fs = require('fs');
 const { platform_env, platform_env_source } = require('../../../env');
 
-// -M level  adds rssi / snr / noise to every decoded packet.
-// -M freq   adds the frequency it landed on (freq1/freq2 for an FSK protocol like the Orion).
+// -M level adds Modulation, Frequency, RSSI, SNR and Noise to every decoded packet — ALL of them,
+// from the one flag. `rtl_433 -M help` lists the only valid values:
 //
-// Both are optional to the decoder and free at runtime — they annotate packets rtl_433 has already
-// demodulated. They are in the DEFAULT so a fresh machine records the signal figures the Real time
-// tab and the antenna scoreboard are built around; without them those columns are simply blank and
-// look like a broken feature rather than an unset flag.
-const DEFAULT_ARGS = '-f 916.45M -s 1600k -R 223 -F json -M level -M freq';
+//   time | protocol | level | noise | stats | bits
+//
+// There is NO `-M freq`. It was in this default for a while and it is worse than useless: rtl_433
+// rejects the unknown value, and the run comes back with no signal metadata at all — the exact
+// symptom (`rssi`, `snr`, `freq` all null) that looks like a dead antenna. If a machine's columns
+// are blank, check WATER_RTL433_ARGS for that flag before touching the hardware.
+//
+// -M level is optional to the decoder and free at runtime — it annotates packets rtl_433 has
+// already demodulated. It is in the DEFAULT so a fresh machine records the signal figures the Real
+// time tab and the antenna scoreboard are built around.
+const DEFAULT_ARGS = '-f 916.45M -s 1600k -R 223 -F json -M level';
 
 /**
  * The decoder command for THIS machine.

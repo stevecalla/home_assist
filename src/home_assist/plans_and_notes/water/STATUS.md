@@ -235,8 +235,14 @@ transmission, every meter in range, bounded by a short prune rather than by usag
 Bugs found on live hardware, each one invisible in replay mode:
 
 1. **`integrity` and `freq_mhz` were always NULL.** The code read `Integrity` -- our own synthetic
-   replay meter's field name. rtl_433 says `mic`. And frequency needs `-M freq` and arrives as
-   `freq1`/`freq2` for an FSK protocol. Both flags are now in DEFAULT_ARGS.
+   replay meter's field name. rtl_433 says `mic`. Frequency arrives as `freq1`/`freq2` for an FSK
+   protocol. Both are now read tolerantly.
+1b. **`-M freq` was added to DEFAULT_ARGS and it is not a real flag.** `rtl_433 -M help` lists
+   `time|protocol|level|noise|stats|bits` and nothing else, and says plainly that `level` adds
+   *Modulation, Frequency, RSSI, SNR and Noise*. Passing the bogus value is not ignored -- the run
+   comes back with **no** signal metadata at all, which presents as a dead antenna rather than a bad
+   flag. Removed from DEFAULT_ARGS, pinned by a test. If a machine's `.env` still carries it,
+   `WATER_RTL433_ARGS` overrides the default and the columns stay blank.
 2. **Packets reached MySQL once a minute.** The buffer flushed inside `tick()`. The browser polled
    every 4s and correctly showed nothing for 56 of them.
 3. **Row keys included the array index.** One arrival at the top changed every key below it, so
@@ -252,6 +258,33 @@ Bugs found on live hardware, each one invisible in replay mode:
 Known gap, deliberately not built: `gap_spans` only sees silences BETWEEN two packets, so a
 trailing silence -- the one happening right now -- is not in the gaps list. The `since last packet`
 counter covers that case and turns red, which is the more visible place for it.
+
+## Listening to the radio directly (2026-08-02)
+
+Menu section **RADIO — listen to it yourself** (items 11-15), backed by
+`modules/water/listen.js` and documented in `RTL433_FIELD_GUIDE.md` in this folder.
+
+| Item | Window (MHz) | Hears |
+|---|---|---|
+| Listen — MY meter | 915.650 - 917.250 | our meter only, readable console |
+| Listen — the neighbourhood | 914.488 - 915.512 | everything nearby EXCEPT ours -- deliberately |
+| Listen — neighbourhood + mine | 914.800 - 917.200 | both, for antenna comparisons |
+| Signal figures | 915.650 - 917.250 | per-packet rssi/snr/freq + running mean, formatted in Node |
+| Protocol 223 present? | -- | `-R help`, no dongle needed |
+
+Three decisions worth keeping:
+
+- **The wrapper stops and restarts the collector.** The dongle has one owner. Doing this by hand
+  means remembering to restart it, and the failure mode of forgetting is silent -- an unmonitored
+  house that looks fine. The restart is wired to both `close` and `exit`.
+- **The narrow survey is a feature.** `-f 915M -s 1024k` cannot reach 916.45, so traffic on it
+  proves dongle, driver, USB and antenna are all fine while our meter is silent. A test pins the
+  window below the meter so nobody "fixes" it.
+- **No `jq`.** The signal table formats itself. jq is not on Git Bash, and a command that only runs
+  on one of the two machines is not a diagnostic.
+
+Menu numbers are now assigned by position rather than written into each item, so inserting a section
+no longer means renumbering by hand. Tests pin id uniqueness and that every advertised doc exists.
 
 ## Open items
 

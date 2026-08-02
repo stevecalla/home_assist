@@ -18,6 +18,11 @@
     "home_assist_test": "node src/home_assist/run_tests.js",
     "home_assist_check": "node src/home_assist/run_checks.js",
     "water_collector": "node collector_water.js",
+    "water_listen_meter": "node src/home_assist/modules/water/listen.js meter",
+    "water_listen_nearby": "node src/home_assist/modules/water/listen.js nearby",
+    "water_listen_wide": "node src/home_assist/modules/water/listen.js wide",
+    "water_listen_signal": "node src/home_assist/modules/water/listen.js signal",
+    "water_rtl_check": "node src/home_assist/modules/water/listen.js check",
     "water_collector_dev": "nodemon --watch collector_water.js --watch src/home_assist/modules/water --ext js collector_water.js",
     "water_check": "node collector_water.js --check",
     "water_replay": "node collector_water.js --replay",
@@ -51,7 +56,7 @@
     "pm2_save": "pm2 save",
     "pm2_startup": "node src/home_assist/pm2_startup_help.js",
     "pm2_update": "pm2 update",
-    "deploy": "npm run home_assist_build && (npm run pm2_restart_home_assist || npm run pm2_start_home_assist) && (npm run pm2_restart_water_collector || npm run pm2_start_water_collector) && npm run pm2_save && npm run pm2_startup"
+    "deploy": "npm run home_assist_build && (npm run pm2_restart_home_assist || npm run pm2_start_home_assist) && (npm run pm2_restart_water_collector || npm run pm2_start_water_collector) && npm run pm2_save"
   },
   "dependencies": {
     "cors": "^2.8.5",

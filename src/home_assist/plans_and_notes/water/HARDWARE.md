@@ -71,6 +71,13 @@ This is the part that decides whether the project works, and it is not a softwar
   stays put. Coax is lossy at 915 MHz, so extending the antenna side throws away signal you cannot
   get back.
 
+### Listening yourself
+
+`RTL433_FIELD_GUIDE.md` in this folder covers using `rtl_433` directly — the five **RADIO** menu
+items, the bandwidth arithmetic that decides what a given `-f`/`-s` pair can and cannot hear, and
+the help commands that answer flag questions from the binary in front of you rather than from
+memory. `npm run water_listen_signal` is the one to have running while moving the antenna.
+
 ### Proving reception before trusting it
 
 ```bash

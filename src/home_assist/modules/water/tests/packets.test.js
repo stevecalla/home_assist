@@ -164,12 +164,24 @@ test('the decoder field names the radio actually uses are the ones we read', fun
 });
 
 test('the frequency tooltip says which -M flag it needs', function () {
-  // rssi/snr/noise come from `-M level`; frequency needs `-M freq` as well. Without that sentence a
-  // permanently blank column reads as a broken feature rather than an unset flag.
+  // Modulation, Frequency, RSSI, SNR and Noise all arrive from the ONE flag `-M level`. Without
+  // that sentence a permanently blank column reads as a broken feature rather than an unset flag.
   const api = fs.readFileSync(require.resolve('../api'), 'utf8');
   const i = api.indexOf("key: 'freq_mhz'");
   assert.ok(i !== -1, 'freq_mhz must be a defined column');
-  assert.match(api.slice(i, i + 600), /-M freq/, 'the tooltip must name the flag it requires');
+  assert.match(api.slice(i, i + 900), /-M level/, 'the tooltip must name the flag it requires');
+});
+
+test('the default decoder args never pass -M freq', function () {
+  // `rtl_433 -M help` lists exactly: time|protocol|level|noise|stats|bits. `freq` is NOT among them.
+  // Passing it is not a harmless no-op — rtl_433 rejects the unknown value and the run comes back
+  // with NO signal metadata at all, so rssi/snr/freq are all null and it reads as a dead antenna.
+  // This test exists because that flag shipped in DEFAULT_ARGS and cost a debugging session.
+  const rtl = fs.readFileSync(require.resolve('../collector/rtl433'), 'utf8');
+  const m = rtl.match(/const DEFAULT_ARGS = '([^']+)'/);
+  assert.ok(m, 'DEFAULT_ARGS must be a plain string literal');
+  assert.match(m[1], /-M level/, '-M level supplies every signal column the UI draws');
+  assert.doesNotMatch(m[1], /-M\s+freq/, '-M freq is not a valid rtl_433 option');
 });
 
 test('packets are flushed on their own fast timer, not on the 60-second tick', function () {

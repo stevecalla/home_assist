@@ -60,9 +60,9 @@ function num_or_null(v) {
  *   working; `mic` is first because it is what the actual decoder says.
  *
  * FREQUENCY — for an FSK protocol like the Orion, rtl_433 reports the two tone frequencies as
- *   `freq1` and `freq2`, not a single `freq`. Either way the field only exists when `-M freq` is in
- *   WATER_RTL433_ARGS: `-M level` supplies rssi/snr/noise and says nothing about frequency, which is
- *   why those three populate and this one does not.
+ *   `freq1` and `freq2`, not a single `freq`. All of these arrive from `-M level`, which adds
+ *   Modulation, Frequency, RSSI, SNR and Noise together. There is no separate `-M freq` — it is not
+ *   a valid value, and passing it costs you the whole set.
  */
 const INTEGRITY_FIELDS = ['mic', 'Integrity', 'integrity', 'crc', 'CRC'];
 const FREQ_FIELDS = ['freq', 'freq1', 'frequency'];
