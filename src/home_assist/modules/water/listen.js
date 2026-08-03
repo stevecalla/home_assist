@@ -42,6 +42,16 @@ const c = (color, t) => `${color}${t}${RESET}`;
 
 const PM2_NAME = 'water_collector';
 
+// -C customary makes rtl_433 print Fahrenheit, mph and inches instead of Celsius, m/s and mm.
+// Display only -- it converts on output and changes nothing about decoding.
+//
+// It is on the SURVEY modes (nearby / wide / sweep), where you are reading a neighbour's weather
+// station, and deliberately NOT on `meter` or `signal`. Those two exist to reproduce the
+// collector's exact tuning as a reference; a flag the collector does not pass would make them a
+// worse reference, and nothing on protocol 223 has a temperature in it anyway.
+//
+// The other values are `-C si` and `-C native` (the default, whatever the decoder emitted).
+
 /**
  * The band sweep.
  *
@@ -74,7 +84,7 @@ function hop_centres() {
 
 const SWEEP_HOPS = hop_centres();
 const SWEEP_ARGS = SWEEP_HOPS.map((f) => '-f ' + f + 'M').join(' ') +
-  ' -s ' + SWEEP_RATE_KHZ + 'k -M level -H ' + SWEEP_DWELL_S;
+  ' -s ' + SWEEP_RATE_KHZ + 'k -M level -C customary -H ' + SWEEP_DWELL_S;
 
 /**
  * The listening positions.
@@ -94,7 +104,7 @@ const MODES = {
   },
   nearby: {
     label: 'Survey the neighbourhood',
-    args: '-f 915M -s 1024k',
+    args: '-f 915M -s 1024k -C customary',
     window: '914.488 - 915.512 MHz',
     hears: 'the neighbours\' utility meters and weather stations -- NOT your meter',
     blurb: 'Deliberately does not cover 916.45, so your own meter will never appear here. That is\n' +
@@ -103,7 +113,7 @@ const MODES = {
   },
   wide: {
     label: 'Survey including my meter',
-    args: '-f 916M -s 2400k',
+    args: '-f 916M -s 2400k -C customary',
     window: '914.800 - 917.200 MHz',
     hears: 'the neighbours AND your meter, in one window',
     blurb: 'The comparison view. A neighbour\'s transmitter you did not move is a fixed reference:\n' +

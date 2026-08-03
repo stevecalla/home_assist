@@ -86,6 +86,13 @@ rtl_433 -f 916.45M -s 1600k -R 223 -F json -M level
 | `-R n` | Enable only decoder `n` | Every default-enabled decoder runs. Fine for exploring, more CPU |
 | `-F` | Output format | Human-readable key/value on the console |
 | `-M` | Extra fields. `level` adds Modulation, **Frequency**, RSSI, SNR and Noise — all five, from the one flag | Those columns are simply absent |
+| `-C` | Units on output: `customary` (°F, mph, inches), `si`, or `native` | Whatever the decoder emitted — usually °C, m/s, mm |
+
+`-C` is display only; it converts after decoding and changes nothing about what is received. The
+survey modes (`nearby`, `wide`, `sweep`) pass `-C customary` so a neighbour's weather station reads
+in Fahrenheit. `meter` and `signal` deliberately do not — those exist to reproduce the collector's
+exact arguments, and a flag the collector never passes makes them a worse reference. Protocol 223
+has no temperature in it either way.
 
 ---
 

@@ -82,6 +82,19 @@ test('the sweep asks for -M level so you can tell WHERE a hit landed', function 
   assert.match(listen.MODES.sweep.args, /-H \d+/, 'multiple -f without -H never actually hops');
 });
 
+test('survey modes report customary units; the collector-reference modes do not', function () {
+  // -C customary is display only -- Fahrenheit, mph, inches instead of Celsius, m/s, mm. It belongs
+  // on the modes where you read a neighbour's weather station. It does NOT belong on `meter` or
+  // `signal`, whose whole job is to reproduce the collector's exact arguments: a flag the collector
+  // never passes makes them a worse reference, and protocol 223 has no temperature in it.
+  for (const key of ['nearby', 'wide', 'sweep']) {
+    assert.match(listen.MODES[key].args, /-C customary/, key + ' should report in F/mph/inches');
+  }
+  for (const key of ['meter', 'signal']) {
+    assert.doesNotMatch(listen.MODES[key].args, /-C /, key + ' must mirror the collector exactly');
+  }
+});
+
 test('menu item numbers are unique', function () {
   // Numbers are assigned by position now. This is the regression that change prevents: inserting a
   // section used to mean renumbering by hand, and a duplicate id makes one item unreachable.
