@@ -302,6 +302,16 @@ Three decisions worth keeping:
   uses `rtl_power` to rank all seven NOAA channels in one 6s sweep, because squelch is off by design
   and an empty channel sounds identical to a live one with dead air. Noise floor is the MEDIAN of
   the bins, not the mean -- a strong carrier drags a mean up and hides itself.
+- **The scan shipped broken and the fix is the interesting part.** First version used a 190 kHz span
+  and auto gain, and returned 0.0 dB of variation across every bin -- which it printed as "nothing
+  on any channel". A narrow span makes rtl_power degenerate; auto gain lets the AGC normalise away
+  the contrast being measured. Now 1 MHz at fixed `-g 40`, plus a GUARD: spread under 1.5 dB is
+  reported as "this sweep did not measure anything", never as a finding. Plus `scan fm` as a control
+  -- broadcast FM is the loudest thing in civilian radio, so if THAT sweeps flat the rig is broken.
+  Without a control, "nothing found" is unfalsifiable.
+- **Retune raced with the close handler.** `switching = true; kill(); switching = false;` reset the
+  flag before 'close' fired a tick later, so every keypress read as the radio dying and quit the
+  session. Fixed by tagging the child itself (`me.retired`) -- identity cannot race.
 - **`am` is airband, not AM broadcast.** 0.53-1.7 MHz is far below the R820T's ~24 MHz floor and
   needs a direct-sampling mod or an upconverter. The mode refuses a frequency below the floor and
   says why rather than tuning somewhere meaningless.

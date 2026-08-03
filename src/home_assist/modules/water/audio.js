@@ -143,6 +143,22 @@ function resolve_fm_cmd() {
   return 'rtl_fm';
 }
 
+/**
+ * rtl_power, resolved the same way as rtl_fm: an explicit env var wins, then the sibling of
+ * whatever WATER_RTL433_CMD points at, then a bare name from PATH.
+ */
+function resolve_power_cmd() {
+  const explicit = platform_env('WATER_RTL_POWER_CMD', '');
+  if (explicit) return explicit;
+  const fm = resolve_fm_cmd();
+  if (fm && (fm.includes('/') || fm.includes('\\'))) {
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    const sibling = path.join(path.dirname(fm), 'rtl_power' + ext);
+    if (fs.existsSync(sibling)) return sibling;
+  }
+  return 'rtl_power';
+}
+
 function on_path(name) {
   try {
     execSync((process.platform === 'win32' ? 'where ' : 'command -v ') + name,
@@ -232,8 +248,12 @@ function usage(code) {
     console.log('    ' + c(BOLD, k.padEnd(8)) + m.label.padEnd(22) + c(DIM, m.band_label));
     console.log('             ' + c(DIM, 'default ' + m.default_mhz + ' MHz'));
   });
-  console.log('    ' + c(BOLD, 'scan    ') + 'Which NOAA channel is receivable here'.padEnd(22) +
+  console.log('    ' + c(BOLD, 'scan    ') + 'Which NOAA channel reaches here' .padEnd(22) +
     c(DIM, 'measures all seven, no listening'));
+  console.log('    ' + c(BOLD, 'scan fm ') + 'Control sweep of 88-108'.padEnd(22) +
+    c(DIM, 'proves the measurement itself works'));
+  console.log('\n    ' + c(DIM, '--direct     try direct sampling for frequencies below ' + TUNER_LOW_MHZ + ' MHz (AM broadcast).'));
+  console.log('    ' + c(DIM, '             Most boards cannot do it; it costs nothing to find out.'));
   console.log('\n    ' + c(DIM, 'With no frequency given you are asked for one; Enter takes the default.'));
   console.log('    ' + c(DIM, 'While playing:  [n]/[p] step   [1-9] pick a channel   [q] quit'));
   console.log('\n    ' + c(DIM, '--record N   write N seconds to a .wav instead of playing it.'));
@@ -246,24 +266,56 @@ function usage(code) {
 
 /**
  * Listening to seven channels of hiss to find the one with a voice on it is a bad use of a
- * Saturday. `rtl_power` measures received power across a span and prints it as CSV, so one six
- * second sweep answers the question numerically.
+ * Saturday. `rtl_power` measures received power across a span and prints it as CSV, so one sweep
+ * answers the question numerically. It is a third binary from the same rtl-sdr package, and it
+ * takes the dongle like everything else here.
  *
- * It is a different binary again -- rtl_power, also from the rtl-sdr package -- and it takes the
- * dongle like everything else here.
+ * TWO THINGS THIS GOT WRONG THE FIRST TIME, both of which produced a confident WRONG answer:
+ *
+ * 1. THE SPAN WAS TOO NARROW. 190 kHz across seven channels looks tidy and makes rtl_power
+ *    degenerate -- it works by tuning and FFT-ing in hops, and a span far below its working
+ *    bandwidth returns a flat line. The output read "nothing on any channel" with 0.0 dB of
+ *    variation, which is not what an empty band looks like; an empty band still has a few dB of
+ *    thermal noise wobbling between bins. A full 1 MHz gives it room and puts the channels in the
+ *    middle rather than at the edges.
+ *
+ * 2. GAIN WAS LEFT ON AUTO. The AGC normalises the strongest thing in the window, so a real
+ *    carrier pulls everything else down and the CONTRAST -- the only thing being measured --
+ *    collapses. A fixed gain makes readings comparable between runs as well.
+ *
+ * The lesson generalises past this function: a measurement that cannot fail visibly will report
+ * "nothing found" when what happened was "nothing measured", and those are opposite facts.
  */
-function scan_noaa() {
-  const cmd = resolve_fm_cmd().replace(/rtl_fm(\.exe)?$/, function (m) {
-    return m.replace('rtl_fm', 'rtl_power');
-  });
-  const use = cmd.endsWith('rtl_power') || cmd.endsWith('rtl_power.exe') ? cmd : 'rtl_power';
+const SCAN_BANDS = {
+  noaa: {
+    label: 'the seven NOAA channels',
+    span: '162.0M:163.0M:12.5k',
+    channels: NOAA_CHANNELS,
+    mode: 'weather',
+  },
+  fm: {
+    // The control. Broadcast FM is the loudest thing in civilian radio -- if a sweep of 88-108
+    // comes back as flat as 162 did, the RIG is broken and the NOAA result means nothing.
+    label: 'the FM broadcast band (a control sweep)',
+    span: '88M:108M:100k',
+    channels: null,
+    mode: 'fm',
+  },
+};
 
-  // 12.5 kHz bins over a span that brackets all seven channels with a margin either side, so every
-  // channel lands well inside rather than on an edge bin.
-  const args = ['-f', '162.380M:162.570M:12.5k', '-i', '6', '-1', '-'];
+// Below this much variation across the whole span, the sweep did not measure anything. Real
+// thermal noise alone wobbles by several dB bin to bin.
+const SCAN_MIN_SPREAD_DB = 1.5;
+
+function scan_band(key) {
+  const band = SCAN_BANDS[key] || SCAN_BANDS.noaa;
+  const use = resolve_power_cmd();
+
+  // -g 40 rather than auto: see the note above. -i 6 -1 is one six-second pass.
+  const args = ['-f', band.span, '-g', '40', '-i', '6', '-1', '-'];
 
   console.log('');
-  console.log(c(BOLD + CYAN, '  Scanning the seven NOAA channels'));
+  console.log(c(BOLD + CYAN, '  Scanning ' + band.label));
   console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
   console.log(c(DIM, '  $ ' + use + ' ' + args.join(' ')));
   console.log(c(DIM, '  About 6 seconds.\n'));
@@ -276,7 +328,7 @@ function scan_noaa() {
     else console.log(c(RED, 'failed.'));
   }
 
-  const r = spawnSync(use, args, { encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+  const r = spawnSync(use, args, { encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
 
   if (restore) {
     process.stdout.write(c(YELLOW, '  Restarting the collector… '));
@@ -308,20 +360,53 @@ function scan_noaa() {
     return 1;
   }
 
-  // Noise floor as the MEDIAN of every bin, not the mean. A strong carrier drags a mean upward and
-  // makes itself look less exceptional than it is; the median ignores it.
-  const sorted = bins.map(function (b) { return b.db; }).sort(function (a, b) { return a - b; });
-  const floor = sorted[Math.floor(sorted.length / 2)];
+  const dbs = bins.map(function (b) { return b.db; }).sort(function (a, b) { return a - b; });
+  const floor = dbs[Math.floor(dbs.length / 2)];   // MEDIAN: a strong carrier drags a mean upward
+  const spread = dbs[dbs.length - 1] - dbs[0];
 
-  const rows = NOAA_CHANNELS.map(function (ch) {
-    // Take the strongest bin within half a channel of the nominal centre -- the tuner is not exact
-    // and a carrier can sit a bin either side.
+  console.log('\n  bins        ' + c(DIM, String(bins.length)));
+  console.log('  noise floor ' + c(DIM, floor.toFixed(1) + ' dB') + c(DIM, '   (median)'));
+  console.log('  spread      ' + c(spread < SCAN_MIN_SPREAD_DB ? RED : DIM, spread.toFixed(1) + ' dB') +
+    c(DIM, '   (strongest bin minus weakest)'));
+
+  // THE GUARD. Without this, a sweep that measured nothing prints as "nothing is there".
+  if (spread < SCAN_MIN_SPREAD_DB) {
+    console.log('');
+    console.log(c(RED, '  ✗ This sweep did not measure anything.'));
+    console.log(c(DIM, '    ' + spread.toFixed(1) + ' dB of variation across ' + bins.length + ' bins is not what an empty band'));
+    console.log(c(DIM, '    looks like — thermal noise alone wobbles more than that. Something in the'));
+    console.log(c(DIM, '    measurement chain is flat, so this says NOTHING about what is on the air.'));
+    console.log(c(DIM, '\n    Check: is the dongle actually free? Does `rtl_test -t` pass?'));
+    if (key !== 'fm') console.log(c(DIM, '    Then run the control sweep: ') + c(BOLD, 'node ' + path.relative(process.cwd(), __filename) + ' scan fm'));
+    console.log('');
+    return 1;
+  }
+
+  if (!band.channels) {
+    // Control sweep: no channel list, so report the peaks and whether the rig looks alive.
+    const top = bins.slice().sort(function (a, b) { return b.db - a.db; }).slice(0, 8);
+    console.log('');
+    console.log(c(DIM, '  strongest bins'));
+    console.log(c(DIM, '  ─────────────────────────────────────────────'));
+    top.forEach(function (b) {
+      const over = b.db - floor;
+      const bar = '█'.repeat(Math.max(0, Math.min(24, Math.round(over))));
+      console.log('  ' + b.mhz.toFixed(2).padStart(7) + ' MHz  ' + b.db.toFixed(1).padStart(7) + '  ' +
+        c(GREEN, bar) + '  +' + over.toFixed(1));
+    });
+    console.log('');
+    console.log(c(GREEN, '  ✓ The receiver is measuring properly — ' + spread.toFixed(1) + ' dB of contrast.'));
+    console.log(c(DIM, '    So if the NOAA sweep comes back flat, that is a real answer about 162 MHz'));
+    console.log(c(DIM, '    and not a broken measurement.\n'));
+    return 0;
+  }
+
+  const rows = band.channels.map(function (ch) {
     let best = -999;
     bins.forEach(function (b) { if (Math.abs(b.mhz - ch) <= 0.0125 && b.db > best) best = b.db; });
     return { ch: ch, db: best, over: best - floor };
   }).sort(function (a, b) { return b.over - a.over; });
 
-  console.log('\n  noise floor  ' + c(DIM, floor.toFixed(1) + ' dB') + c(DIM, '   (median of ' + bins.length + ' bins)'));
   console.log('');
   console.log(c(DIM, '  channel     dB      above floor'));
   console.log(c(DIM, '  ─────────────────────────────────────────────'));
@@ -336,19 +421,22 @@ function scan_noaa() {
   });
 
   const winner = rows[0];
+  const self = 'node ' + path.relative(process.cwd(), __filename);
   console.log('');
   if (winner.over >= 10) {
     console.log(c(GREEN, '  ✓ ' + winner.ch.toFixed(3) + ' is clearly transmitting. Listen to it:'));
-    console.log('    ' + c(BOLD, 'node ' + path.relative(process.cwd(), __filename) + ' weather ' + winner.ch.toFixed(3)));
+    console.log('    ' + c(BOLD, self + ' weather ' + winner.ch.toFixed(3)));
   } else if (winner.over >= 5) {
-    console.log(c(YELLOW, '  ? ' + winner.ch.toFixed(3) + ' is the strongest but marginal. Worth trying; may be'));
-    console.log(c(YELLOW, '    intelligible with a better antenna position.'));
-    console.log('    ' + c(BOLD, 'node ' + path.relative(process.cwd(), __filename) + ' weather ' + winner.ch.toFixed(3)));
+    console.log(c(YELLOW, '  ? ' + winner.ch.toFixed(3) + ' is the strongest but marginal. Worth trying; it may be'));
+    console.log(c(YELLOW, '    intelligible from a better antenna position.'));
+    console.log('    ' + c(BOLD, self + ' weather ' + winner.ch.toFixed(3)));
   } else {
-    console.log(c(RED, '  ✗ Nothing above the noise floor on any of the seven.'));
-    console.log(c(DIM, '    Either no NWR transmitter reaches this spot, or the antenna is the problem.'));
-    console.log(c(DIM, '    The stub is cut for 915 MHz; 162 MHz wants something much longer (~46 cm'));
-    console.log(c(DIM, '    for a quarter wave). Try moving it to a window before concluding anything.'));
+    console.log(c(YELLOW, '  Nothing above the noise floor on any of the seven — but the sweep DID work'));
+    console.log(c(YELLOW, '  (' + spread.toFixed(1) + ' dB of contrast), so this is a real result about this antenna.'));
+    console.log(c(DIM, '\n    Most likely the antenna. The stub is cut for 915 MHz and a quarter wave at'));
+    console.log(c(DIM, '    162 MHz is about 46 cm, so it is badly mismatched — a wire that length,'));
+    console.log(c(DIM, '    vertical, at a window, would change this completely.'));
+    console.log(c(DIM, '\n    Confirm the rig first: ') + c(BOLD, self + ' scan fm'));
   }
   console.log('');
   return 0;
@@ -393,11 +481,13 @@ async function main() {
   const argv = process.argv.slice(2);
   const key = (argv[0] || '').toLowerCase();
 
-  if (key === 'scan') process.exit(scan_noaa());
+  if (key === 'scan') process.exit(scan_band((argv[1] || 'noaa').toLowerCase()));
 
   const mode = MODES[key];
   if (!mode) usage(key ? 1 : 0);
 
+  // --direct is the one long shot for the AM broadcast band. See the refusal message below.
+  const direct = argv.includes('--direct');
   const ri = argv.indexOf('--record');
   const record_s = ri === -1 ? 0 : Math.max(1, Math.round(Number(argv[ri + 1]) || 30));
   const freq_arg = argv.slice(1).find(function (a) {
@@ -422,11 +512,24 @@ async function main() {
   if (!Number.isFinite(mhz) || mhz <= 0) mhz = await choose_frequency(mode);
   console.log('');
 
-  if (mhz < TUNER_LOW_MHZ) {
+  if (mhz < TUNER_LOW_MHZ && !direct) {
     console.log(c(RED, '  ' + mhz + ' MHz is below this tuner\'s floor of ' + TUNER_LOW_MHZ + ' MHz.'));
-    console.log(c(DIM, '  The AM broadcast band (0.53 - 1.7 MHz) needs a direct-sampling modification or an'));
-    console.log(c(DIM, '  upconverter. A stock RTL-SDR cannot receive it, and no flag changes that.\n'));
+    console.log(c(DIM, '  The R820T simply does not tune there. The AM broadcast band (0.53 - 1.7 MHz)'));
+    console.log(c(DIM, '  needs one of three things, and only the first is free:\n'));
+    console.log(c(DIM, '    1. DIRECT SAMPLING — bypass the tuner and feed the ADC directly. Some boards'));
+    console.log(c(DIM, '       route this (RTL-SDR Blog V3 does); most, including the NESDR SMArt, do not.'));
+    console.log(c(DIM, '       Costs nothing to find out:'));
+    console.log('       ' + c(BOLD, 'node ' + path.relative(process.cwd(), __filename) + ' am ' + mhz + ' --direct'));
+    console.log(c(DIM, '    2. An UPCONVERTER (~$50) that shifts HF up into the tuner\'s range.'));
+    console.log(c(DIM, '    3. A dongle built for it — RTL-SDR Blog V3, ~$35.\n'));
+    console.log(c(DIM, '  Worth asking whether it earns any of that: AM stations almost all stream online,'));
+    console.log(c(DIM, '  and a pocket radio does this better for $10.\n'));
     process.exit(1);
+  }
+  if (mhz < TUNER_LOW_MHZ && direct) {
+    console.log(c(YELLOW, '  Trying DIRECT SAMPLING for ' + mhz + ' MHz — bypassing the tuner entirely.'));
+    console.log(c(DIM, '  This only works if the board routes the ADC input, which most do not. Expect'));
+    console.log(c(DIM, '  either silence or noise; a clear station would be a pleasant surprise.\n'));
   }
   if (mhz > TUNER_HIGH_MHZ) {
     console.log(c(RED, '  ' + mhz + ' MHz is above this tuner\'s ceiling of ' + TUNER_HIGH_MHZ + ' MHz.\n'));
@@ -494,12 +597,11 @@ async function main() {
   let fd = null;
   let bytes = 0;
   let timer = null;
-  let switching = false;
   let quitting = false;
 
   function args_for(f) {
     return ['-f', f + 'M', '-M', mode.mod, '-s', String(mode.sample_hz), '-r', String(mode.audio_hz)]
-      .concat(mode.extra || [], ['-']);
+      .concat(mode.extra || [], direct ? ['-E', 'direct'] : [], ['-']);
   }
 
   function start_stream(f) {
@@ -507,6 +609,11 @@ async function main() {
     console.log(c(DIM, '\n  $ ' + cmd + ' ' + args.join(' ')));
 
     radio = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    // Identity, not a shared flag. The first version of this used `switching = true; kill();
+    // switching = false;` -- but 'close' fires on a LATER tick, by which point the flag was already
+    // back to false, so every retune looked like the radio dying on its own and quit the session.
+    // Tagging the child itself cannot race with anything.
+    const me = radio;
 
     radio.on('error', function (err) {
       console.log(c(RED, '  Could not start ' + cmd + ': ' + err.message));
@@ -543,7 +650,7 @@ async function main() {
 
     radio.on('close', function (code) {
       // A close we caused by retuning is not the end of the session.
-      if (switching) return;
+      if (me.retired) return;
       if (timer) clearTimeout(timer);
       if (sink) { try { sink.stdin.end(); } catch (e) { /* closed */ } }
       if (fd !== null) finish_recording();
@@ -553,11 +660,10 @@ async function main() {
   }
 
   function stop_stream() {
-    switching = true;
-    try { if (radio) radio.kill(); } catch (e) { /* gone */ }
-    try { if (sink) sink.stdin.end(); } catch (e) { /* closed */ }
-    radio = null; sink = null;
-    switching = false;
+    if (radio) { radio.retired = true; try { radio.kill(); } catch (e) { /* gone */ } }
+    if (sink) { try { sink.stdin.end(); } catch (e) { /* closed */ } }
+    radio = null;
+    sink = null;
   }
 
   function finish_recording() {
@@ -646,4 +752,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { MODES, NOAA_CHANNELS, wav_header, resolve_fm_cmd, TUNER_LOW_MHZ, TUNER_HIGH_MHZ };
+module.exports = { MODES, NOAA_CHANNELS, SCAN_BANDS, resolve_power_cmd, SCAN_MIN_SPREAD_DB, wav_header, resolve_fm_cmd, TUNER_LOW_MHZ, TUNER_HIGH_MHZ };

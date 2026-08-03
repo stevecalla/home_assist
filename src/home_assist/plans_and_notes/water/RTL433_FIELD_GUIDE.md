@@ -475,10 +475,19 @@ adjacent channel out. `-r` is separate: the audio sample rate coming out the oth
 | FM broadcast | 88.1 – 107.9 MHz | Yes |
 | Tuner's usable span | ~24 – 1766 MHz | — |
 
-An R820T simply cannot go below about 24 MHz. Receiving the AM broadcast band needs a
-direct-sampling hardware modification or an upconverter, and no combination of flags substitutes for
-either. The `am` mode refuses a frequency below the floor and says why, rather than tuning somewhere
-meaningless and producing hiss.
+An R820T simply cannot go below about 24 MHz, so **your local AM station is out of reach** — 1460
+kHz is 1.46 MHz, sixteen times below the floor. The `am` mode refuses rather than tuning somewhere
+meaningless, and lists the three ways round it:
+
+| Option | Cost | Odds |
+|---|---|---|
+| **Direct sampling** — bypass the tuner, feed the ADC directly | free to try: `audio.js am 1.46 --direct` | Low. Some boards route this (RTL-SDR Blog V3); the NESDR SMArt is not one of them |
+| **Upconverter** — shifts HF up into the tuner's range | ~$50 | Works |
+| **A dongle built for it** — RTL-SDR Blog V3 | ~$35 | Works |
+
+Worth asking whether it earns any of that. AM stations almost all stream online, and a pocket radio
+does this better for $10. The `--direct` flag exists because it costs nothing to find out, not
+because it is likely.
 
 Expect long silences on airband. Aviation is not continuous transmission; that is what it sounds
 like when it is working.
@@ -513,32 +522,59 @@ to install if it finds none. `WATER_AUDIO_PLAYER` overrides it; `{rate}` is subs
 npm run water_weather_scan
 ```
 
-Seven channels exist and most of them are silent anywhere you stand. Listening to each in turn means
-sitting through six lots of hiss to find one voice, and hiss is genuinely hard to distinguish from
-"working but nothing transmitting right now" — squelch is off deliberately, so an empty channel
-sounds like a live one with dead air.
+Seven channels exist and most are silent anywhere you stand. Listening to each in turn means sitting
+through six lots of hiss to find one voice — and hiss is genuinely hard to tell from "working, but
+nothing transmitting right now", because squelch is off deliberately.
 
 So measure instead. `rtl_power` — a third binary from the same `rtl-sdr` package — sweeps the span
-and reports received power per bin. One six-second pass ranks all seven:
+and reports received power per bin:
 
 ```
-  noise floor  -28.4 dB   (median of 16 bins)
+  bins        80
+  noise floor -31.0 dB   (median)
+  spread      20.5 dB    (strongest bin minus weakest)
 
   channel     dB      above floor
   ─────────────────────────────────────────────
-  ✓ 162.475    -11.2   ████████████████  +17.2
-  ? 162.550    -22.1   ██████            +6.3
-  · 162.400    -27.9   ·                 +0.5
+  ✓ 162.475    -13.0   ██████████████████  +18.0
+  · 162.500    -28.5   ██                  +2.5
+  · 162.400    -32.4                       -1.3
 ```
 
 The floor is the **median** of every bin, not the mean — a strong carrier drags a mean upward and
-makes itself look less exceptional than it is. Above 10 dB is a real transmitter; 5–10 is marginal
-and may clean up with a better antenna position; under 5 is nothing.
+makes itself look less exceptional than it is. Above 10 dB is a real transmitter; 5–10 is marginal;
+under 5 is nothing.
 
-If all seven come back flat, the honest reading is either that no NWR transmitter reaches the spot
-or that the antenna is the problem. The stub is cut for 915 MHz — a quarter wave at 162 MHz is about
-46 cm, so the little whip is badly mismatched there. Move it to a window before concluding anything
-about coverage.
+### Two ways this measurement lies, and the guard against both
+
+The first version of this scan reported *"nothing above the noise floor on any of the seven"* with
+**0.0 dB of variation across every bin**. That is not what an empty band looks like — thermal noise
+alone wobbles several dB between bins. It had measured nothing and printed it as a finding.
+
+| Cause | Why it flattens the result |
+|---|---|
+| **Span too narrow** — 190 kHz across the seven channels | `rtl_power` tunes and FFTs in hops. A span far below its working bandwidth returns a flat line. The fix is a full 1 MHz, which also puts the channels in the middle rather than on the edges |
+| **Gain left on auto** | The AGC normalises the strongest thing in the window, so a real carrier pulls everything else down and the *contrast* — the only thing being measured — collapses. A fixed `-g 40` also makes runs comparable |
+
+Both are fixed, and there is now a guard: **if the spread across the whole span is under 1.5 dB, the
+scan refuses to report a result** and says the sweep did not measure anything. "Nothing found" and
+"nothing measured" are opposite facts, and a measurement that cannot fail visibly will quietly
+report the first when it means the second.
+
+There is also a control:
+
+```
+node src/home_assist/modules/water/audio.js scan fm
+```
+
+Broadcast FM is the loudest thing in civilian radio. If 88–108 sweeps with 20 dB of contrast, the
+receiver is measuring properly and a flat 162 result is a real answer about your antenna. If the
+control is *also* flat, the rig is broken and the NOAA result means nothing. Without a control,
+"nothing found" is unfalsifiable.
+
+If the sweep works and 162 is genuinely empty, the antenna is the first suspect: the stub is cut for
+915 MHz, and a quarter wave at 162 MHz is about **46 cm**. A wire that length, vertical, at a window,
+would change the result completely.
 
 ### NOAA Weather Radio — the one worth having
 

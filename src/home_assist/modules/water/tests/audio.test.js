@@ -128,3 +128,33 @@ test('stepping through the NOAA channels wraps and never leaves the list', funct
     assert.ok(ch.includes(step(f, 1)) && ch.includes(step(f, -1)), 'a step must stay on the list');
   }
 });
+
+test('the scan span is wide enough for rtl_power to work, and brackets the channels', function () {
+  // The bug this pins: a 190 kHz span across the seven channels made rtl_power degenerate and
+  // return a dead-flat line, which printed as a confident "nothing on any channel". rtl_power
+  // tunes and FFTs in hops; a span far below its working bandwidth measures nothing.
+  const m = audio.SCAN_BANDS.noaa.span.match(/^([\d.]+)M:([\d.]+)M:([\d.]+)k$/);
+  assert.ok(m, 'span must be low:high:bin');
+  const low = Number(m[1]), high = Number(m[2]);
+  assert.ok(high - low >= 0.9, 'span must be at least ~1 MHz; got ' + (high - low));
+  for (const ch of audio.NOAA_CHANNELS) {
+    assert.ok(ch > low && ch < high, ch + ' must sit inside the span, not on its edge');
+  }
+});
+
+test('a flat sweep must be reported as "not measured", never as "nothing there"', function () {
+  // These are opposite facts and the difference is the whole point of the guard. Thermal noise
+  // alone wobbles several dB bin to bin, so a sub-1.5 dB spread means the chain is flat.
+  assert.ok(audio.SCAN_MIN_SPREAD_DB >= 1, 'the floor must be above real thermal wobble');
+  assert.ok(audio.SCAN_MIN_SPREAD_DB <= 4, 'too high and a genuinely quiet band reads as broken');
+});
+
+test('there is a control band so a flat result can be falsified', function () {
+  // If 88-108 also comes back flat, the receiver is broken and the NOAA result means nothing.
+  // Without a control, "nothing found" is unfalsifiable.
+  const fm = audio.SCAN_BANDS.fm;
+  assert.ok(fm, 'a control sweep must exist');
+  assert.equal(fm.channels, null, 'the control has no channel list -- it measures contrast');
+  const m = fm.span.match(/^([\d.]+)M:([\d.]+)M/);
+  assert.ok(Number(m[1]) <= 88 && Number(m[2]) >= 107.9, 'the control must cover broadcast FM');
+});
