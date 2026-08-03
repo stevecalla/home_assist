@@ -108,7 +108,7 @@ const SECTIONS = [
     { label: 'Listen — FM radio (audio)', desc: 'rtl_fm, not rtl_433. Asks for a frequency (Enter = 98.5). While playing: [n]/[p] to step stations, [q] to quit', bin: 'node', args: [AUDIO, 'fm'], cli: 'node ' + AUDIO + ' fm', interactive: true },
     { label: 'Listen — AM / airband (audio)', desc: 'Narrowband AM. Aviation, not AM broadcast — 530-1700 kHz is below what this tuner can reach. Enter = 124.0', bin: 'node', args: [AUDIO, 'am'], cli: 'node ' + AUDIO + ' am', interactive: true },
     { label: 'Scan — which NOAA channel is here?', desc: 'Measures all seven channels in one 6s sweep and ranks them. Do this BEFORE listening to seven lots of static', bin: 'node', args: [AUDIO, 'scan'], cli: 'node ' + AUDIO + ' scan' },
-    { label: 'Listen — NOAA weather radio', desc: 'Continuous voice forecast. Pick a channel on start, then [1-7] to flip between them live', bin: 'node', args: [AUDIO, 'weather'], cli: 'node ' + AUDIO + ' weather', interactive: true },
+    { label: 'Listen — NOAA weather (162.475)', desc: 'Opens on the channel MEASURED here by the scan above. [1-7] flips between all seven live; re-scan after moving the antenna', bin: 'node', args: [AUDIO, 'weather'], cli: 'node ' + AUDIO + ' weather', interactive: true },
     { label: 'Record 30s of FM to a .wav', desc: 'For when you are on the server over RDP: audio plays where the dongle is, so record it and copy the file instead', bin: 'node', args: [AUDIO, 'fm', '98.5', '--record', '30'], cli: 'node ' + AUDIO + ' fm 98.5 --record 30' },
     { label: 'Is protocol 223 in this build?', desc: 'rtl_433 -R help, filtered to Orion. No dongle needed, does not touch the collector', bin: 'node', args: [LISTEN, 'check'], cli: 'node ' + LISTEN + ' check' },
   ]},

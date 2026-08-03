@@ -36,7 +36,7 @@ And three that use `rtl_fm` rather than `rtl_433`, for analogue audio:
 | Listen — FM radio 98.5 | `npm run water_fm` | plays on **this machine's** speakers |
 | Listen — AM / airband 124.0 | `npm run water_am` | narrowband AM — aviation, *not* AM broadcast |
 | **Scan — which NOAA channel?** | `npm run water_weather_scan` | ranks all seven in one 6s sweep |
-| **Listen — NOAA weather** | `npm run water_weather` | continuous voice forecast, pick a channel |
+| **Listen — NOAA weather** | `npm run water_weather` | opens on 162.475, the channel measured here |
 | Record 30s of FM to a .wav | `npm run water_fm_record` | for when you are on the server remotely |
 
 The rest of this file is the native commands underneath, for when you want to go off-menu.
@@ -598,9 +598,53 @@ would have sounded like bad reception rather than like a wrong setting.
 162.400   162.425   162.450   162.475   162.500   162.525   162.550
 ```
 
-Run the scan above first, then listen to whichever it ranks highest. While listening, `1`–`7` flips
-between them instantly, so you can confirm the scan by ear in a few seconds. Every NWR transmitter in
-the country uses one of these seven and nothing else, so there is no searching beyond this list.
+**162.475 is the one that reaches this house** — the scan put it 6.5 dB above a noise floor the other
+six sat within 2 dB of, and it is audible, if rough. That is the default the mode opens on. It is a
+fact about this address rather than about NOAA, so `WATER_NOAA_CHANNEL` in `.env` overrides it, and
+the scan should be re-run after any antenna change rather than trusting the number.
+
+While listening, `1`–`7` flips between all seven instantly, so the scan can be confirmed by ear in a
+few seconds. Every NWR transmitter in the country uses one of these and nothing else.
+
+### Retuning had to wait for the dongle
+
+The first version of live retuning killed `rtl_fm` and spawned the replacement immediately. That
+fails, every time:
+
+```
+  → 162.400 MHz   channel 1 of 7
+  $ rtl_fm -f 162.4M ...
+Signal caught, exiting!
+  usb_claim_interface error -6
+  Failed to open rtlsdr device #0.
+```
+
+`kill()` sends SIGTERM, `rtl_fm` shuts down gracefully, and **libusb releases the interface some
+milliseconds after the process is gone.** The replacement raced it and lost, so every keypress
+killed the session. The fix is to wait for the child's `close` event plus a 400 ms settle before
+claiming the device again — with a SIGKILL escalation after 1.5 s so a hung radio cannot deadlock
+the session, and a single-retune lock so holding `n` down cannot start several radios racing each
+other.
+
+The same wait matters on quit: `q` restarts the collector, and the collector would hit exactly the
+same error if `rtl_fm` were still holding the radio. Ctrl-C happened to work before this fix only
+because the signal reached the whole process group and killed `rtl_fm` too.
+
+### Antenna: 3 inches is right for water, wrong for weather
+
+| For | Quarter wave | What it is |
+|---|---|---|
+| The meter, 916 MHz | **8.2 cm / 3.2 in** | the stub that ships with the dongle |
+| NOAA, 162.475 MHz | **46 cm / 18 in** | five and a half times longer |
+
+At 3 inches you are at 16% of a quarter wave on 162 MHz, which is why the voice is barely
+intelligible rather than clean. Eighteen inches would likely turn +6.5 dB into something far better.
+
+**Do not leave it long.** 46 cm at 916 MHz is roughly 1.4 wavelengths — the pattern breaks into
+lobes with nulls in it and the feedpoint impedance is wrong, so meter reception could get worse in
+ways that are hard to predict. Use the telescoping whip from the dongle kit: extend for weather,
+collapse back to ~3 in for water. Put the magnetic base on something metal; the ground plane matters
+more at 162 than at 916.
 
 Why it belongs in a leak monitor's repo at all: flash-flood warning and leak detection are the same
 job. Know before the basement does. And it keeps working when the internet does not, which is

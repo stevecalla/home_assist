@@ -50,10 +50,25 @@ const PM2_NAME = 'water_collector';
 const TUNER_LOW_MHZ = 24;
 const TUNER_HIGH_MHZ = 1766;
 
+// How long to wait after rtl_fm exits before claiming the dongle again. libusb releases the
+// interface a little after the process is gone; without this pause the replacement loses the race.
+const USB_SETTLE_MS = 400;
+
 // The seven NOAA Weather Radio channels. Every US transmitter uses one of these and nothing else,
 // so "which frequency" is a seven-way guess rather than a search. In any given place one or two are
 // strong and the rest are silent.
 const NOAA_CHANNELS = [162.400, 162.425, 162.450, 162.475, 162.500, 162.525, 162.550];
+
+/**
+ * Which of the seven to open on. 162.475 is the one MEASURED at this house -- `audio.js scan` put
+ * it 6.5 dB above a noise floor the other six sat within 2 dB of. That is a fact about this
+ * address, not about NOAA, so it is overridable: set WATER_NOAA_CHANNEL if the receiver moves.
+ * Run the scan again after any antenna change rather than trusting this number.
+ */
+function noaa_default() {
+  const raw = Number(platform_env('WATER_NOAA_CHANNEL', '162.475'));
+  return Number.isFinite(raw) && raw > 0 ? raw : 162.475;
+}
 
 const MODES = {
   fm: {
@@ -111,15 +126,16 @@ const MODES = {
     sample_hz: 32000,
     audio_hz: 32000,
     extra: ['-E', 'deemp', '-l', '0'],
-    default_mhz: 162.550,
+    default_mhz: noaa_default(),
     band: [162.400, 162.550],
     band_label: 'NOAA Weather Radio, 162.400 - 162.550 MHz',
     channels: NOAA_CHANNELS,
     blurb: 'A continuous synthesised-voice forecast loop, 24/7 — this is a real broadcast you\n' +
            '  listen to, not a data feed. It also carries a 1050 Hz alarm tone and SAME digital\n' +
            '  headers ahead of warnings, which is the machine-readable half.',
-    tip: 'Seven channels exist and only one or two will be strong here. Try each in turn; the\n' +
-         '  right one is unmistakable — a voice reading the forecast.',
+    tip: 'Seven channels exist and only one or two reach any given house. The default is the one\n' +
+         '  MEASURED here by `audio.js scan`. Run that again after moving the antenna — and press\n' +
+         '  [1]-[7] while listening to check the others by ear.',
   },
 };
 
@@ -652,18 +668,53 @@ async function main() {
       // A close we caused by retuning is not the end of the session.
       if (me.retired) return;
       if (timer) clearTimeout(timer);
-      if (sink) { try { sink.stdin.end(); } catch (e) { /* closed */ } }
-      if (fd !== null) finish_recording();
-      else console.log(c(DIM, '\n  rtl_fm exited (' + code + ').'));
+      // Drop the reference before shutting down, so stop_stream() does not wait on a 'close' that
+      // has already fired.
+      if (radio === me) radio = null;
+      if (fd === null) console.log(c(DIM, '\n  rtl_fm exited (' + code + ').'));
       shutdown();
     });
   }
 
+  /**
+   * Tear the stream down and WAIT for the dongle to actually come free.
+   *
+   * The bug this fixes: kill() sends SIGTERM, rtl_fm shuts down gracefully ("Signal caught,
+   * exiting!"), and libusb releases the interface some milliseconds later. Spawning the
+   * replacement immediately -- which is what a synchronous stop_stream() did -- meant the new
+   * rtl_fm raced the old one to the device and lost:
+   *
+   *     usb_claim_interface error -6
+   *     Failed to open rtlsdr device #0.
+   *
+   * So every retune killed the session. Waiting for 'close' plus a short settle is the whole fix.
+   * The same wait matters on quit, because give_back() restarts the collector -- and the collector
+   * would hit exactly the same error if rtl_fm were still holding the radio.
+   */
   function stop_stream() {
-    if (radio) { radio.retired = true; try { radio.kill(); } catch (e) { /* gone */ } }
-    if (sink) { try { sink.stdin.end(); } catch (e) { /* closed */ } }
-    radio = null;
-    sink = null;
+    return new Promise(function (resolve) {
+      const dying = radio;
+      const old_sink = sink;
+      radio = null;
+      sink = null;
+      if (!dying) return resolve();
+
+      dying.retired = true;
+      let settled = false;
+      function finish() {
+        if (settled) return;
+        settled = true;
+        if (old_sink) { try { old_sink.stdin.end(); } catch (e) { /* closed */ } }
+        // libusb needs a beat after the process is gone before the device is claimable again.
+        setTimeout(resolve, USB_SETTLE_MS);
+      }
+
+      dying.once('close', finish);
+      try { dying.kill('SIGTERM'); } catch (e) { return finish(); }
+      // If it will not go quietly, escalate rather than deadlock the session.
+      setTimeout(function () { try { dying.kill('SIGKILL'); } catch (e) { /* gone */ } }, 1500);
+      setTimeout(finish, 3000);
+    });
   }
 
   function finish_recording() {
@@ -682,10 +733,14 @@ async function main() {
     }
   }
 
-  function shutdown() {
+  async function shutdown() {
     if (quitting) return;
     quitting = true;
     if (process.stdin.isTTY) { try { process.stdin.setRawMode(false); } catch (e) { /* not a tty */ } }
+    // The radio must be gone BEFORE the collector restarts, or the collector inherits the same
+    // usb_claim_interface error and pm2 spends its backoff window failing to open the dongle.
+    await stop_stream();
+    if (fd !== null) finish_recording();
     give_back();
     process.exit(0);
   }
@@ -707,13 +762,23 @@ async function main() {
     return f;
   }
 
-  function retune(f) {
-    if (!Number.isFinite(f) || f === mhz) return;
-    stop_stream();
-    mhz = f;
-    console.log('\n' + c(BOLD + CYAN, '  → ' + mhz.toFixed(3) + ' MHz') +
-      (mode.channels ? c(DIM, '   channel ' + (mode.channels.indexOf(mhz) + 1) + ' of ' + mode.channels.length) : ''));
-    start_stream(mhz);
+  // One retune at a time. Mashing [n] would otherwise start several rtl_fm processes racing each
+  // other for the same device, which is the bug this whole section exists to prevent.
+  let tuning = false;
+  async function retune(f) {
+    if (tuning || quitting || !Number.isFinite(f) || f === mhz) return;
+    tuning = true;
+    try {
+      console.log('\n' + c(BOLD + CYAN, '  → ' + f.toFixed(3) + ' MHz') +
+        (mode.channels ? c(DIM, '   channel ' + (mode.channels.indexOf(f) + 1) + ' of ' + mode.channels.length) : '') +
+        c(DIM, '   releasing the radio…'));
+      await stop_stream();
+      if (quitting) return;
+      mhz = f;
+      start_stream(mhz);
+    } finally {
+      tuning = false;
+    }
   }
 
   function wire_keys() {
@@ -752,4 +817,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { MODES, NOAA_CHANNELS, SCAN_BANDS, resolve_power_cmd, SCAN_MIN_SPREAD_DB, wav_header, resolve_fm_cmd, TUNER_LOW_MHZ, TUNER_HIGH_MHZ };
+module.exports = { MODES, NOAA_CHANNELS, SCAN_BANDS, resolve_power_cmd, noaa_default, USB_SETTLE_MS, SCAN_MIN_SPREAD_DB, wav_header, resolve_fm_cmd, TUNER_LOW_MHZ, TUNER_HIGH_MHZ };

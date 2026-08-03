@@ -158,3 +158,21 @@ test('there is a control band so a flat result can be falsified', function () {
   const m = fm.span.match(/^([\d.]+)M:([\d.]+)M/);
   assert.ok(Number(m[1]) <= 88 && Number(m[2]) >= 107.9, 'the control must cover broadcast FM');
 });
+
+test('the weather mode opens on a real NOAA channel', function () {
+  // The default is the one MEASURED at this address (162.475, 6.5 dB over a floor the other six sat
+  // within 2 dB of). Overridable via WATER_NOAA_CHANNEL, because it is a fact about the house and
+  // not about NOAA -- but it must always be one of the seven, or the mode opens on dead air.
+  assert.ok(audio.NOAA_CHANNELS.includes(audio.MODES.weather.default_mhz),
+    'default ' + audio.MODES.weather.default_mhz + ' is not one of the seven channels');
+  assert.equal(audio.noaa_default(), audio.MODES.weather.default_mhz);
+});
+
+test('there is a settle pause before the dongle is claimed again', function () {
+  // The bug: kill() sends SIGTERM, rtl_fm exits gracefully, and libusb releases the interface a
+  // few ms LATER. Spawning the replacement immediately lost the race every time --
+  // "usb_claim_interface error -6", and the session died on the first keypress. The same wait
+  // matters on quit, or the collector restarts into the same error.
+  assert.ok(audio.USB_SETTLE_MS >= 200, 'too short and the retune races the release again');
+  assert.ok(audio.USB_SETTLE_MS <= 1000, 'too long and every channel change feels broken');
+});

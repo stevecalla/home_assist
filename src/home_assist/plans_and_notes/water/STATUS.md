@@ -309,7 +309,19 @@ Three decisions worth keeping:
   reported as "this sweep did not measure anything", never as a finding. Plus `scan fm` as a control
   -- broadcast FM is the loudest thing in civilian radio, so if THAT sweeps flat the rig is broken.
   Without a control, "nothing found" is unfalsifiable.
-- **Retune raced with the close handler.** `switching = true; kill(); switching = false;` reset the
+- **162.475 is this house's NOAA channel**, measured by the scan at +6.5 dB over a floor the other
+  six sat within 2 dB of. It is the mode's default, overridable with `WATER_NOAA_CHANNEL`. Audible
+  but rough: the 3-inch stub is a quarter wave at 916 MHz and only 16% of one at 162 MHz. A 46 cm
+  whip would fix that -- but must NOT be left on, since 46 cm at 916 MHz is ~1.4 wavelengths and
+  breaks the pattern into lobes. Telescoping antenna, extended for weather, collapsed for water.
+- **Retuning raced libusb, not just the close handler.** Two bugs stacked. First: `switching = true;
+  kill(); switching = false;` reset before 'close' fired a tick later, so a retune read as the radio
+  dying. Second, and the one that survived the first fix: SIGTERM lets rtl_fm exit gracefully and
+  libusb frees the interface some ms AFTER the process is gone, so the replacement lost the race
+  with `usb_claim_interface error -6`. Now waits for 'close' plus a 400 ms settle, SIGKILL after
+  1.5s, and a single-retune lock. The same wait applies on quit -- otherwise the collector restarts
+  into the same error. Ctrl-C only appeared to work because the signal hit the whole process group.
+- **The earlier close-handler race.** `switching = true; kill(); switching = false;` reset the
   flag before 'close' fired a tick later, so every keypress read as the radio dying and quit the
   session. Fixed by tagging the child itself (`me.retired`) -- identity cannot race.
 - **`am` is airband, not AM broadcast.** 0.53-1.7 MHz is far below the R820T's ~24 MHz floor and
