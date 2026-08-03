@@ -35,7 +35,8 @@ And three that use `rtl_fm` rather than `rtl_433`, for analogue audio:
 |---|---|---|
 | Listen — FM radio 98.5 | `npm run water_fm` | plays on **this machine's** speakers |
 | Listen — AM / airband 124.0 | `npm run water_am` | narrowband AM — aviation, *not* AM broadcast |
-| **Listen — NOAA weather** | `npm run water_weather` | continuous voice forecast, 162.550 |
+| **Scan — which NOAA channel?** | `npm run water_weather_scan` | ranks all seven in one 6s sweep |
+| **Listen — NOAA weather** | `npm run water_weather` | continuous voice forecast, pick a channel |
 | Record 30s of FM to a .wav | `npm run water_fm_record` | for when you are on the server remotely |
 
 The rest of this file is the native commands underneath, for when you want to go off-menu.
@@ -400,11 +401,26 @@ it genuinely helps, or you want to know whether a second dongle would be worth b
 on weather radio at the end).
 
 ```
-npm run water_fm            # 98.5 MHz, FM broadcast
-npm run water_am            # 124.0 MHz, civil airband
-npm run water_weather       # 162.550 MHz, NOAA Weather Radio
+npm run water_fm            # asks for a frequency; Enter takes 98.5
+npm run water_am            # civil airband; Enter takes 124.0
+npm run water_weather_scan  # which NOAA channel reaches this house
+npm run water_weather       # pick a channel, then flip between them live
 npm run water_fm_record     # 30 seconds to a .wav
 ```
+
+**Every listening mode asks for a frequency and takes the default on Enter**, and while it is
+playing you can retune without restarting:
+
+| Key | Does |
+|---|---|
+| `n` / `p` (or arrow keys) | step to the next / previous — 0.2 MHz on broadcast FM so you land on real stations, 25 kHz elsewhere, and channel-by-channel on `weather` |
+| `1` – `7` | jump straight to a NOAA channel |
+| `q` or Ctrl-C | stop, and restart the collector |
+
+The collector is stopped **once** for the whole session, not per retune. Only `rtl_fm` and the
+player are torn down and rebuilt each time you tune — a fresh player per frequency, because reusing
+one across a retune clicks, and would play at the wrong speed if the two modes had different audio
+rates.
 
 Off-menu, with a frequency:
 
@@ -491,6 +507,39 @@ three packages installed before it runs is not a diagnostic.
 For live playback the wrapper looks for `aplay`, then `ffplay`, then `play` (sox), and tells you what
 to install if it finds none. `WATER_AUDIO_PLAYER` overrides it; `{rate}` is substituted.
 
+### Finding the channel first
+
+```
+npm run water_weather_scan
+```
+
+Seven channels exist and most of them are silent anywhere you stand. Listening to each in turn means
+sitting through six lots of hiss to find one voice, and hiss is genuinely hard to distinguish from
+"working but nothing transmitting right now" — squelch is off deliberately, so an empty channel
+sounds like a live one with dead air.
+
+So measure instead. `rtl_power` — a third binary from the same `rtl-sdr` package — sweeps the span
+and reports received power per bin. One six-second pass ranks all seven:
+
+```
+  noise floor  -28.4 dB   (median of 16 bins)
+
+  channel     dB      above floor
+  ─────────────────────────────────────────────
+  ✓ 162.475    -11.2   ████████████████  +17.2
+  ? 162.550    -22.1   ██████            +6.3
+  · 162.400    -27.9   ·                 +0.5
+```
+
+The floor is the **median** of every bin, not the mean — a strong carrier drags a mean upward and
+makes itself look less exceptional than it is. Above 10 dB is a real transmitter; 5–10 is marginal
+and may clean up with a better antenna position; under 5 is nothing.
+
+If all seven come back flat, the honest reading is either that no NWR transmitter reaches the spot
+or that the antenna is the problem. The stub is cut for 915 MHz — a quarter wave at 162 MHz is about
+46 cm, so the little whip is badly mismatched there. Move it to a window before concluding anything
+about coverage.
+
 ### NOAA Weather Radio — the one worth having
 
 ```
@@ -513,9 +562,9 @@ would have sounded like bad reception rather than like a wrong setting.
 162.400   162.425   162.450   162.475   162.500   162.525   162.550
 ```
 
-The mode prints the list and highlights the one it is on. Try each; the right one is unmistakable —
-a voice reading the forecast. There is no scanning to do beyond that, because every NWR transmitter
-in the country uses one of these seven and nothing else.
+Run the scan above first, then listen to whichever it ranks highest. While listening, `1`–`7` flips
+between them instantly, so you can confirm the scan by ear in a few seconds. Every NWR transmitter in
+the country uses one of these seven and nothing else, so there is no searching beyond this list.
 
 Why it belongs in a leak monitor's repo at all: flash-flood warning and leak detection are the same
 job. Know before the basement does. And it keeps working when the internet does not, which is

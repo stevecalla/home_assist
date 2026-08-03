@@ -261,7 +261,7 @@ counter covers that case and turns red, which is the more visible place for it.
 
 ## Listening to the radio directly (2026-08-02)
 
-Menu section **RADIO — listen to it yourself** (items 11-20), backed by
+Menu section **RADIO — listen to it yourself** (items 11-21), backed by
 `modules/water/listen.js` and documented in `RTL433_FIELD_GUIDE.md` in this folder.
 
 | Item | Window (MHz) | Hears |
@@ -296,6 +296,12 @@ Three decisions worth keeping:
   It needed a third demodulator: `fm` is wideband at 200 kHz and renders a 25 kHz NOAA channel as
   faint hiss; `am` is wrong outright. Not an ALERTING path -- SAME decoding would mean holding the
   dongle full time, which is a second-dongle decision, not a software one.
+- **Live retuning, and a scan before it.** Every audio mode asks for a frequency (Enter takes the
+  default) and accepts `n`/`p`/`1-7` while playing to retune without restarting -- the collector is
+  stopped ONCE for the session, only rtl_fm and the player are rebuilt per tune. `audio.js scan`
+  uses `rtl_power` to rank all seven NOAA channels in one 6s sweep, because squelch is off by design
+  and an empty channel sounds identical to a live one with dead air. Noise floor is the MEDIAN of
+  the bins, not the mean -- a strong carrier drags a mean up and hides itself.
 - **`am` is airband, not AM broadcast.** 0.53-1.7 MHz is far below the R820T's ~24 MHz floor and
   needs a direct-sampling mod or an upconverter. The mode refuses a frequency below the floor and
   says why rather than tuning somewhere meaningless.

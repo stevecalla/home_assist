@@ -26,6 +26,7 @@
     "water_fm": "node src/home_assist/modules/water/audio.js fm 98.5",
     "water_am": "node src/home_assist/modules/water/audio.js am 124.0",
     "water_weather": "node src/home_assist/modules/water/audio.js weather",
+    "water_weather_scan": "node src/home_assist/modules/water/audio.js scan",
     "water_fm_record": "node src/home_assist/modules/water/audio.js fm 98.5 --record 30",
     "water_rtl_check": "node src/home_assist/modules/water/listen.js check",
     "water_collector_dev": "nodemon --watch collector_water.js --watch src/home_assist/modules/water --ext js collector_water.js",

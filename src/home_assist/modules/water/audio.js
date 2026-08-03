@@ -33,6 +33,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync, execSync } = require('child_process');
+const readline = require('readline');
 const { platform_env } = require('../../env');
 const data_dir = require('../../data_dir');
 const rtl433 = require('./collector/rtl433');
@@ -63,6 +64,9 @@ const MODES = {
     sample_hz: 200000,
     audio_hz: 48000,
     default_mhz: 98.5,
+    // US FM broadcast sits on odd tenths, so one press is 0.2 MHz -- the next real station,
+    // not the next arbitrary number.
+    step_mhz: 0.2,
     band: [88.1, 107.9],
     band_label: 'US FM broadcast, 88.1 - 107.9 MHz',
     blurb: 'Wideband FM. The loudest, easiest thing an RTL-SDR can receive — if a local station\n' +
@@ -76,6 +80,7 @@ const MODES = {
     sample_hz: 12000,
     audio_hz: 12000,
     default_mhz: 124.0,
+    step_mhz: 0.025,
     band: [108, 137],
     band_label: 'civil airband, 108 - 137 MHz (AM is still standard there)',
     blurb: 'Narrowband AM. Aviation is the practical use — the AM BROADCAST band (530-1700 kHz)\n' +
@@ -93,6 +98,7 @@ const MODES = {
     audio_hz: 32000,
     extra: ['-E', 'deemp', '-l', '0'],
     default_mhz: 162.550,
+    step_mhz: 0.025,
     band: [136, 174],
     band_label: 'VHF narrowband FM, 136 - 174 MHz',
     blurb: 'The general-purpose narrowband mode. Weather radio, ham repeaters, business band.\n' +
@@ -218,54 +224,204 @@ function pm2_do(verb) {
 }
 
 // ------------------------------------------------------------------------------------------------
-
 function usage(code) {
   console.log('\n  Usage: node ' + path.relative(process.cwd(), __filename) +
-    ' <' + Object.keys(MODES).join('|') + '> [MHz] [--record <seconds>]\n');
+    ' <' + Object.keys(MODES).join('|') + '|scan> [MHz] [--record <seconds>]\n');
   Object.keys(MODES).forEach((k) => {
     const m = MODES[k];
-    console.log('    ' + c(BOLD, k.padEnd(4)) + m.label.padEnd(22) + c(DIM, m.band_label));
-    console.log('         ' + c(DIM, 'default ' + m.default_mhz + ' MHz'));
+    console.log('    ' + c(BOLD, k.padEnd(8)) + m.label.padEnd(22) + c(DIM, m.band_label));
+    console.log('             ' + c(DIM, 'default ' + m.default_mhz + ' MHz'));
   });
+  console.log('    ' + c(BOLD, 'scan    ') + 'Which NOAA channel is receivable here'.padEnd(22) +
+    c(DIM, 'measures all seven, no listening'));
+  console.log('\n    ' + c(DIM, 'With no frequency given you are asked for one; Enter takes the default.'));
+  console.log('    ' + c(DIM, 'While playing:  [n]/[p] step   [1-9] pick a channel   [q] quit'));
   console.log('\n    ' + c(DIM, '--record N   write N seconds to a .wav instead of playing it.'));
-  console.log('    ' + c(DIM, '             Use this when you are on the server over RDP: audio plays'));
-  console.log('    ' + c(DIM, '             on the SERVER\'s sound card, not on your laptop.\n'));
+  console.log('    ' + c(DIM, '             Audio plays on the SERVER\'s sound card, not on your laptop.\n'));
   process.exit(code);
 }
 
-function main() {
+// ------------------------------------------------------------------------------------------------
+// scan — which NOAA channel actually reaches this house
+
+/**
+ * Listening to seven channels of hiss to find the one with a voice on it is a bad use of a
+ * Saturday. `rtl_power` measures received power across a span and prints it as CSV, so one six
+ * second sweep answers the question numerically.
+ *
+ * It is a different binary again -- rtl_power, also from the rtl-sdr package -- and it takes the
+ * dongle like everything else here.
+ */
+function scan_noaa() {
+  const cmd = resolve_fm_cmd().replace(/rtl_fm(\.exe)?$/, function (m) {
+    return m.replace('rtl_fm', 'rtl_power');
+  });
+  const use = cmd.endsWith('rtl_power') || cmd.endsWith('rtl_power.exe') ? cmd : 'rtl_power';
+
+  // 12.5 kHz bins over a span that brackets all seven channels with a margin either side, so every
+  // channel lands well inside rather than on an edge bin.
+  const args = ['-f', '162.380M:162.570M:12.5k', '-i', '6', '-1', '-'];
+
+  console.log('');
+  console.log(c(BOLD + CYAN, '  Scanning the seven NOAA channels'));
+  console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
+  console.log(c(DIM, '  $ ' + use + ' ' + args.join(' ')));
+  console.log(c(DIM, '  About 6 seconds.\n'));
+
+  const state = pm2_state();
+  let restore = false;
+  if (state === 'online') {
+    process.stdout.write(c(YELLOW, '  Stopping the collector… '));
+    if (pm2_do('stop')) { restore = true; console.log(c(YELLOW, 'stopped.')); }
+    else console.log(c(RED, 'failed.'));
+  }
+
+  const r = spawnSync(use, args, { encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+
+  if (restore) {
+    process.stdout.write(c(YELLOW, '  Restarting the collector… '));
+    console.log(pm2_do('start') || pm2_do('restart') ? c(GREEN, 'back up.') : c(RED, 'FAILED.'));
+  }
+
+  if (r.error) {
+    console.log(c(RED, '\n  Could not run ' + use + ': ' + r.error.message));
+    if (r.error.code === 'ENOENT') console.log(c(DIM, '  rtl_power ships with the rtl-sdr package: sudo apt install rtl-sdr'));
+    return 1;
+  }
+
+  // rtl_power CSV: date, time, Hz_low, Hz_high, Hz_step, samples, dbm, dbm, ...
+  const bins = [];
+  String(r.stdout || '').split(/\r?\n/).forEach(function (line) {
+    const f = line.split(',').map(function (x) { return x.trim(); });
+    if (f.length < 7) return;
+    const low = Number(f[2]), step = Number(f[4]);
+    if (!Number.isFinite(low) || !Number.isFinite(step) || step <= 0) return;
+    for (let i = 6; i < f.length; i += 1) {
+      const db = Number(f[i]);
+      if (Number.isFinite(db)) bins.push({ mhz: (low + step * (i - 6 + 0.5)) / 1e6, db: db });
+    }
+  });
+
+  if (!bins.length) {
+    console.log(c(RED, '\n  No usable output from rtl_power.'));
+    if (r.stderr) console.log(c(DIM, String(r.stderr).trim()));
+    return 1;
+  }
+
+  // Noise floor as the MEDIAN of every bin, not the mean. A strong carrier drags a mean upward and
+  // makes itself look less exceptional than it is; the median ignores it.
+  const sorted = bins.map(function (b) { return b.db; }).sort(function (a, b) { return a - b; });
+  const floor = sorted[Math.floor(sorted.length / 2)];
+
+  const rows = NOAA_CHANNELS.map(function (ch) {
+    // Take the strongest bin within half a channel of the nominal centre -- the tuner is not exact
+    // and a carrier can sit a bin either side.
+    let best = -999;
+    bins.forEach(function (b) { if (Math.abs(b.mhz - ch) <= 0.0125 && b.db > best) best = b.db; });
+    return { ch: ch, db: best, over: best - floor };
+  }).sort(function (a, b) { return b.over - a.over; });
+
+  console.log('\n  noise floor  ' + c(DIM, floor.toFixed(1) + ' dB') + c(DIM, '   (median of ' + bins.length + ' bins)'));
+  console.log('');
+  console.log(c(DIM, '  channel     dB      above floor'));
+  console.log(c(DIM, '  ─────────────────────────────────────────────'));
+  rows.forEach(function (r2) {
+    const strong = r2.over >= 10;
+    const maybe = r2.over >= 5 && r2.over < 10;
+    const bar = '█'.repeat(Math.max(0, Math.min(24, Math.round(r2.over))));
+    const mark = strong ? c(GREEN, '✓') : maybe ? c(YELLOW, '?') : c(DIM, '·');
+    console.log('  ' + mark + ' ' + r2.ch.toFixed(3) + '  ' + r2.db.toFixed(1).padStart(7) + '   ' +
+      (strong ? c(GREEN, bar) : maybe ? c(YELLOW, bar) : c(DIM, bar)) + '  ' +
+      (r2.over >= 0 ? '+' : '') + r2.over.toFixed(1));
+  });
+
+  const winner = rows[0];
+  console.log('');
+  if (winner.over >= 10) {
+    console.log(c(GREEN, '  ✓ ' + winner.ch.toFixed(3) + ' is clearly transmitting. Listen to it:'));
+    console.log('    ' + c(BOLD, 'node ' + path.relative(process.cwd(), __filename) + ' weather ' + winner.ch.toFixed(3)));
+  } else if (winner.over >= 5) {
+    console.log(c(YELLOW, '  ? ' + winner.ch.toFixed(3) + ' is the strongest but marginal. Worth trying; may be'));
+    console.log(c(YELLOW, '    intelligible with a better antenna position.'));
+    console.log('    ' + c(BOLD, 'node ' + path.relative(process.cwd(), __filename) + ' weather ' + winner.ch.toFixed(3)));
+  } else {
+    console.log(c(RED, '  ✗ Nothing above the noise floor on any of the seven.'));
+    console.log(c(DIM, '    Either no NWR transmitter reaches this spot, or the antenna is the problem.'));
+    console.log(c(DIM, '    The stub is cut for 915 MHz; 162 MHz wants something much longer (~46 cm'));
+    console.log(c(DIM, '    for a quarter wave). Try moving it to a window before concluding anything.'));
+  }
+  console.log('');
+  return 0;
+}
+
+// ------------------------------------------------------------------------------------------------
+// interactive frequency choice
+
+function ask(question, def) {
+  return new Promise(function (resolve) {
+    if (!process.stdin.isTTY) return resolve(def);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, function (a) {
+      rl.close();
+      const t = String(a).trim();
+      resolve(t === '' ? def : t);
+    });
+  });
+}
+
+async function choose_frequency(mode) {
+  if (mode.channels) {
+    console.log('  ' + c(BOLD, 'Pick a channel:'));
+    mode.channels.forEach(function (f, i) {
+      console.log('    ' + c(BOLD, String(i + 1)) + '. ' + f.toFixed(3) +
+        (f === mode.default_mhz ? c(DIM, '   (default)') : ''));
+    });
+    const a = await ask('\n  Channel 1-' + mode.channels.length + ', a frequency, or Enter for ' +
+      mode.default_mhz.toFixed(3) + ': ', String(mode.default_mhz));
+    const n = Number(a);
+    if (Number.isInteger(n) && n >= 1 && n <= mode.channels.length) return mode.channels[n - 1];
+    return Number.isFinite(n) && n > 1 ? n : mode.default_mhz;
+  }
+  const a = await ask('  Frequency in MHz, or Enter for ' + mode.default_mhz + ': ', String(mode.default_mhz));
+  const n = Number(a);
+  return Number.isFinite(n) && n > 0 ? n : mode.default_mhz;
+}
+
+// ------------------------------------------------------------------------------------------------
+
+async function main() {
   const argv = process.argv.slice(2);
   const key = (argv[0] || '').toLowerCase();
+
+  if (key === 'scan') process.exit(scan_noaa());
+
   const mode = MODES[key];
   if (!mode) usage(key ? 1 : 0);
 
   const ri = argv.indexOf('--record');
   const record_s = ri === -1 ? 0 : Math.max(1, Math.round(Number(argv[ri + 1]) || 30));
-  const freq_arg = argv.slice(1).find((a) => /^[\d.]+$/.test(a) && (ri === -1 || argv.indexOf(a) !== ri + 1));
-  const mhz = Number(freq_arg) || mode.default_mhz;
+  const freq_arg = argv.slice(1).find(function (a) {
+    return /^[\d.]+$/.test(a) && (ri === -1 || argv.indexOf(a) !== ri + 1);
+  });
 
   const cmd = resolve_fm_cmd();
-  const args = ['-f', mhz + 'M', '-M', mode.mod, '-s', String(mode.sample_hz), '-r', String(mode.audio_hz)]
-    .concat(mode.extra || [], ['-']);
 
   console.log('');
-  console.log(c(BOLD + CYAN, '  ' + mode.label) + c(DIM, '   ' + mhz + ' MHz'));
+  console.log(c(BOLD + CYAN, '  ' + mode.label));
   console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
   console.log('  band    ' + mode.band_label);
   console.log('  window  ' + c(BOLD, (mode.sample_hz / 1000) + ' kHz') + c(DIM, '  — matched to the signal, same idea as -s on rtl_433'));
   console.log('  audio   ' + (mode.audio_hz / 1000) + ' kHz, 16-bit mono');
   console.log('');
   console.log('  ' + mode.blurb);
-  if (mode.channels) {
-    console.log('');
-    console.log('  channels  ' + mode.channels.map(function (f) {
-      return f === mhz ? c(BOLD + GREEN, f.toFixed(3)) : c(DIM, f.toFixed(3));
-    }).join('  '));
-  }
   if (mode.tip) console.log('\n  ' + c(DIM, mode.tip));
   console.log('');
 
-  // --- range sanity, before anything expensive happens -------------------------------------------
+  // A frequency on the command line wins. Otherwise ask, with the default one Enter away.
+  let mhz = Number(freq_arg);
+  if (!Number.isFinite(mhz) || mhz <= 0) mhz = await choose_frequency(mode);
+  console.log('');
+
   if (mhz < TUNER_LOW_MHZ) {
     console.log(c(RED, '  ' + mhz + ' MHz is below this tuner\'s floor of ' + TUNER_LOW_MHZ + ' MHz.'));
     console.log(c(DIM, '  The AM broadcast band (0.53 - 1.7 MHz) needs a direct-sampling modification or an'));
@@ -281,7 +437,6 @@ function main() {
     console.log(c(YELLOW, '  The tuner will go there; whether anything is transmitting is another matter.\n'));
   }
 
-  // --- decide the sink BEFORE taking the dongle --------------------------------------------------
   let player = null;
   let out_file = null;
   if (record_s) {
@@ -296,7 +451,7 @@ function main() {
       console.log(c(RED, '  No audio player found (looked for aplay, ffplay, play).'));
       console.log(c(DIM, '  Ubuntu:  sudo apt install alsa-utils'));
       console.log(c(DIM, '  Or set WATER_AUDIO_PLAYER in .env; {rate} is substituted.'));
-      console.log(c(DIM, '  Or record instead:  --record 30   (then copy the .wav to your laptop)\n'));
+      console.log(c(DIM, '  Or record instead:  --record 30\n'));
       process.exit(1);
     }
     console.log('  Playing through ' + c(BOLD, player.name) + c(DIM, ' — on THIS machine\'s sound card.'));
@@ -304,24 +459,21 @@ function main() {
       console.log(c(YELLOW, '  You appear to be connected remotely. The sound comes out where the dongle is,'));
       console.log(c(YELLOW, '  not where you are. Use --record 30 and copy the .wav instead.'));
     }
-    console.log('');
   }
 
-  // --- take the dongle ---------------------------------------------------------------------------
+  // --- take the dongle ONCE, for the whole session including retunes ------------------------------
   const state = pm2_state();
   let restore = false;
   if (state === 'online') {
-    process.stdout.write(c(YELLOW, '  Stopping the collector so this can have the dongle… '));
+    process.stdout.write(c(YELLOW, '\n  Stopping the collector so this can have the dongle… '));
     if (pm2_do('stop')) { restore = true; console.log(c(YELLOW, 'stopped.')); }
     else console.log(c(RED, 'failed — expect usb_claim_interface error -6.'));
     console.log(c(BOLD + YELLOW, '  LEAK DETECTION IS OFF until this finishes. It restarts automatically.'));
   } else if (state === 'no-pm2' || state === 'absent') {
-    console.log(c(DIM, '  (No pm2 collector found. If one is running in another terminal, stop it first.)'));
+    console.log(c(DIM, '\n  (No pm2 collector found. If one is running in another terminal, stop it first.)'));
   } else {
-    console.log(c(DIM, '  (Collector already stopped — leaving it that way.)'));
+    console.log(c(DIM, '\n  (Collector already stopped — leaving it that way.)'));
   }
-  console.log(c(DIM, '\n  $ ' + cmd + ' ' + args.join(' ')));
-  console.log(c(DIM, '  Ctrl-C to stop.\n'));
 
   let restored = false;
   function give_back() {
@@ -334,80 +486,161 @@ function main() {
       : c(RED, 'FAILED — run: npm run pm2_start_water_collector'));
   }
 
-  const radio = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  // ------------------------------------------------------------------------------------------------
+  // the stream, which can be torn down and rebuilt on a different frequency
+
+  let radio = null;
   let sink = null;
-  let bytes = 0;
   let fd = null;
+  let bytes = 0;
   let timer = null;
+  let switching = false;
+  let quitting = false;
 
-  radio.on('error', function (err) {
-    console.log(c(RED, '  Could not start ' + cmd + ': ' + err.message));
-    if (err.code === 'ENOENT') {
-      console.log(c(DIM, '  rtl_fm ships with the rtl-sdr package, same as rtl_test.'));
-      console.log(c(DIM, '  Ubuntu:  sudo apt install rtl-sdr'));
-      console.log(c(DIM, '  Or set WATER_RTL_FM_CMD in .env.'));
-    }
-  });
+  function args_for(f) {
+    return ['-f', f + 'M', '-M', mode.mod, '-s', String(mode.sample_hz), '-r', String(mode.audio_hz)]
+      .concat(mode.extra || [], ['-']);
+  }
 
-  radio.stderr.on('data', function (d) {
-    const s = String(d);
-    if (/usb_claim_interface error/.test(s)) {
-      console.log(c(RED, '\n  Something else already has the dongle.'));
+  function start_stream(f) {
+    const args = args_for(f);
+    console.log(c(DIM, '\n  $ ' + cmd + ' ' + args.join(' ')));
+
+    radio = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+
+    radio.on('error', function (err) {
+      console.log(c(RED, '  Could not start ' + cmd + ': ' + err.message));
+      if (err.code === 'ENOENT') {
+        console.log(c(DIM, '  rtl_fm ships with the rtl-sdr package, same as rtl_test.'));
+        console.log(c(DIM, '  Ubuntu:  sudo apt install rtl-sdr'));
+        console.log(c(DIM, '  Or set WATER_RTL_FM_CMD in .env.'));
+      }
+    });
+
+    radio.stderr.on('data', function (d) {
+      const s = String(d);
+      if (/usb_claim_interface error/.test(s)) console.log(c(RED, '\n  Something else already has the dongle.'));
+      process.stderr.write(d);
+    });
+
+    if (out_file) {
+      let last = 0;
+      radio.stdout.on('data', function (chunk) {
+        fs.writeSync(fd, chunk);
+        bytes += chunk.length;
+        const secs = Math.floor(bytes / (mode.audio_hz * 2));
+        if (secs > last) { last = secs; process.stdout.write('\r  ' + c(DIM, '  recorded ' + secs + 's / ' + record_s + 's')); }
+      });
+      timer = setTimeout(function () { try { radio.kill(); } catch (e) { /* gone */ } }, record_s * 1000);
+    } else {
+      // A FRESH player per tune. Reusing one across a retune sounds like a click and, if the two
+      // frequencies had different audio rates, would play at the wrong speed.
+      sink = spawn(player.cmd, player.args, { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true });
+      sink.on('error', function (err) { console.log(c(RED, '  ' + player.cmd + ' failed: ' + err.message)); });
+      sink.stdin.on('error', function () { /* player gone */ });
+      radio.stdout.on('data', function (chunk) { try { sink.stdin.write(chunk); } catch (e) { /* player gone */ } });
     }
-    process.stderr.write(d);
-  });
+
+    radio.on('close', function (code) {
+      // A close we caused by retuning is not the end of the session.
+      if (switching) return;
+      if (timer) clearTimeout(timer);
+      if (sink) { try { sink.stdin.end(); } catch (e) { /* closed */ } }
+      if (fd !== null) finish_recording();
+      else console.log(c(DIM, '\n  rtl_fm exited (' + code + ').'));
+      shutdown();
+    });
+  }
+
+  function stop_stream() {
+    switching = true;
+    try { if (radio) radio.kill(); } catch (e) { /* gone */ }
+    try { if (sink) sink.stdin.end(); } catch (e) { /* closed */ }
+    radio = null; sink = null;
+    switching = false;
+  }
+
+  function finish_recording() {
+    fs.writeSync(fd, wav_header(mode.audio_hz, bytes), 0, 44, 0);
+    fs.closeSync(fd);
+    fd = null;
+    const secs = (bytes / (mode.audio_hz * 2)).toFixed(1);
+    console.log('\n');
+    if (bytes === 0) {
+      console.log(c(RED, '  Nothing was recorded — the radio produced no samples.'));
+    } else {
+      console.log(c(GREEN, '  ✓ ' + secs + 's written (' + (bytes / 1024 / 1024).toFixed(1) + ' MB)'));
+      console.log('  ' + c(CYAN, out_file));
+      console.log(c(DIM, '\n  Copy it to your laptop and play it there:'));
+      console.log(c(DIM, '    scp <user>@<server>:"' + out_file + '" .'));
+    }
+  }
+
+  function shutdown() {
+    if (quitting) return;
+    quitting = true;
+    if (process.stdin.isTTY) { try { process.stdin.setRawMode(false); } catch (e) { /* not a tty */ } }
+    give_back();
+    process.exit(0);
+  }
+
+  // ------------------------------------------------------------------------------------------------
+  // live retuning
+
+  function step(dir) {
+    if (mode.channels) {
+      let i = mode.channels.findIndex(function (f) { return Math.abs(f - mhz) < 1e-9; });
+      if (i === -1) i = 0;
+      i = (i + dir + mode.channels.length) % mode.channels.length;
+      return mode.channels[i];
+    }
+    const s = mode.step_mhz || 0.025;
+    let f = Number((mhz + dir * s).toFixed(4));
+    if (f < mode.band[0]) f = mode.band[1];
+    if (f > mode.band[1]) f = mode.band[0];
+    return f;
+  }
+
+  function retune(f) {
+    if (!Number.isFinite(f) || f === mhz) return;
+    stop_stream();
+    mhz = f;
+    console.log('\n' + c(BOLD + CYAN, '  → ' + mhz.toFixed(3) + ' MHz') +
+      (mode.channels ? c(DIM, '   channel ' + (mode.channels.indexOf(mhz) + 1) + ' of ' + mode.channels.length) : ''));
+    start_stream(mhz);
+  }
+
+  function wire_keys() {
+    if (!process.stdin.isTTY) return;
+    readline.emitKeypressEvents(process.stdin);
+    try { process.stdin.setRawMode(true); } catch (e) { return; }
+    process.stdin.resume();
+    process.stdin.on('keypress', function (str, k) {
+      if (k && k.ctrl && k.name === 'c') return shutdown();
+      if (str === 'q') return shutdown();
+      if (str === 'n' || (k && (k.name === 'right' || k.name === 'up'))) return retune(step(1));
+      if (str === 'p' || (k && (k.name === 'left' || k.name === 'down'))) return retune(step(-1));
+      if (mode.channels && /^[1-9]$/.test(String(str))) {
+        const i = Number(str) - 1;
+        if (i < mode.channels.length) return retune(mode.channels[i]);
+      }
+    });
+  }
 
   if (out_file) {
     fd = fs.openSync(out_file, 'w');
-    fs.writeSync(fd, wav_header(mode.audio_hz, 0));  // patched on close
-    let last_report = 0;
-    radio.stdout.on('data', function (chunk) {
-      fs.writeSync(fd, chunk);
-      bytes += chunk.length;
-      const secs = Math.floor(bytes / (mode.audio_hz * 2));
-      if (secs > last_report) {
-        last_report = secs;
-        process.stdout.write('\r  ' + c(DIM, '  recorded ' + secs + 's / ' + record_s + 's'));
-      }
-    });
-    timer = setTimeout(function () { try { radio.kill(); } catch (e) { /* gone */ } }, record_s * 1000);
+    fs.writeSync(fd, wav_header(mode.audio_hz, 0));
+    console.log(c(DIM, '  Ctrl-C to stop early.'));
   } else {
-    sink = spawn(player.cmd, player.args, { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true });
-    sink.on('error', function (err) { console.log(c(RED, '  ' + player.cmd + ' failed: ' + err.message)); });
-    // EPIPE if the player dies first; that is a normal way for this to end, not a crash.
-    radio.stdout.on('data', function (chunk) { try { sink.stdin.write(chunk); } catch (e) { /* player gone */ } });
-    sink.stdin.on('error', function () { /* player gone */ });
+    console.log('');
+    console.log('  ' + c(BOLD, '[n]') + c(DIM, ' next  ') + c(BOLD, '[p]') + c(DIM, ' previous  ') +
+      (mode.channels ? c(BOLD, '[1-' + mode.channels.length + ']') + c(DIM, ' channel  ') : '') +
+      c(BOLD, '[q]') + c(DIM, ' quit'));
+    wire_keys();
   }
 
-  radio.on('close', function (code) {
-    if (timer) clearTimeout(timer);
-    if (sink) { try { sink.stdin.end(); } catch (e) { /* already closed */ } }
-    if (fd !== null) {
-      // Patch RIFF size and data size now that the length is known.
-      const h = wav_header(mode.audio_hz, bytes);
-      fs.writeSync(fd, h, 0, 44, 0);
-      fs.closeSync(fd);
-      const secs = (bytes / (mode.audio_hz * 2)).toFixed(1);
-      console.log('\n');
-      if (bytes === 0) {
-        console.log(c(RED, '  Nothing was recorded — the radio produced no samples.'));
-      } else {
-        console.log(c(GREEN, '  ✓ ' + secs + 's written (' + (bytes / 1024 / 1024).toFixed(1) + ' MB)'));
-        console.log('  ' + c(CYAN, out_file));
-        console.log(c(DIM, '\n  Copy it to your laptop and play it there:'));
-        console.log(c(DIM, '    scp <user>@<server>:"' + out_file + '" .'));
-      }
-    } else {
-      console.log(c(DIM, '\n  rtl_fm exited (' + code + ').'));
-    }
-    give_back();
-    process.exit(0);
-  });
-
-  process.on('SIGINT', function () {
-    if (timer) clearTimeout(timer);
-    try { radio.kill(); } catch (e) { /* gone */ }
-  });
+  start_stream(mhz);
+  process.on('SIGINT', function () { if (timer) clearTimeout(timer); shutdown(); });
   process.on('exit', give_back);
 }
 

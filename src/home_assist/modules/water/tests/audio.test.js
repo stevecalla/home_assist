@@ -99,3 +99,32 @@ test('every NOAA channel sits inside the weather mode\'s documented band', funct
   }
   assert.ok(audio.NOAA_CHANNELS.includes(m.default_mhz), 'the default must be a real channel');
 });
+
+test('modes without a channel list carry a sensible tuning step', function () {
+  // [n]/[p] step by this. 0.2 MHz for broadcast FM because US stations sit on odd tenths -- one
+  // press should land on the next real station, not the next arbitrary number. 25 kHz elsewhere
+  // because that is the channel spacing in VHF land.
+  assert.equal(audio.MODES.fm.step_mhz, 0.2);
+  assert.equal(audio.MODES.am.step_mhz, 0.025);
+  assert.equal(audio.MODES.nfm.step_mhz, 0.025);
+  assert.ok(!audio.MODES.weather.step_mhz, 'weather steps through its channel list, not by MHz');
+});
+
+test('stepping through the NOAA channels wraps and never leaves the list', function () {
+  // Reimplements the step logic the keypress handler uses. The failure it guards against is
+  // stepping past the end and landing on a frequency no transmitter uses -- which sounds exactly
+  // like the correct channel with nothing on it.
+  const ch = audio.NOAA_CHANNELS;
+  function step(from, dir) {
+    let i = ch.findIndex((f) => Math.abs(f - from) < 1e-9);
+    if (i === -1) i = 0;
+    return ch[(i + dir + ch.length) % ch.length];
+  }
+  assert.equal(step(162.400, -1), 162.550, 'stepping back from the first wraps to the last');
+  assert.equal(step(162.550, 1), 162.400, 'stepping past the last wraps to the first');
+  assert.equal(step(162.475, 1), 162.500);
+  assert.equal(step(162.475, -1), 162.450);
+  for (const f of ch) {
+    assert.ok(ch.includes(step(f, 1)) && ch.includes(step(f, -1)), 'a step must stay on the list');
+  }
+});
