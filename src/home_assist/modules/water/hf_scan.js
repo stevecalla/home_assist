@@ -406,23 +406,50 @@ function main() {
     console.log(c(DIM, '    that the capture files are not all zeros.'));
     process.exit(1);
   }
-  if (best.score >= 3) {
-    console.log(c(GREEN, '  ✓ ' + best.score + ' peaks are stable across both sample rates AND on the 10 kHz grid.'));
-    console.log(c(DIM, '    Those are real AM stations — an alias could not survive the rate change.'));
-    console.log(c(DIM, '    Byte stream reads as: ') + c(BOLD, best.complex ? 'complex I/Q' : 'real samples'));
-    console.log(c(DIM, '    Strongest: ') + c(BOLD, best.stable.filter(function (p) { return on_grid(p.khz); })[0].khz.toFixed(0) + ' kHz'));
-    console.log(c(GREEN, '\n    The Q branch works. Phase 2 — the demodulator — is worth building.'));
-  } else if (results.some(function (r) { return r.stable.length; })) {
-    console.log(c(YELLOW, '  ? Signals are present and stable, but almost none sit on the 10 kHz grid.'));
+  // THREE OUTCOMES, NOT TWO. The first version needed 3 on-grid carriers before it would say
+  // anything positive, which conflated two different questions: "is the ADC pin routed" and "is the
+  // antenna any good". ONE stable, on-grid carrier already settles the first -- an alias cannot
+  // survive a sample-rate change and interference does not land on exact 10 kHz centres. Reporting
+  // that as "almost none on the grid, blame the antenna" buries the finding that actually matters.
+  const on_grid_stable = best.stable.filter(function (p) { return on_grid(p.khz); });
+  const off_grid_stable = best.stable.filter(function (p) { return !on_grid(p.khz); });
+
+  if (on_grid_stable.length >= 3) {
+    console.log(c(GREEN, '  ✓ ' + on_grid_stable.length + ' AM stations, stable across both sample rates and on the 10 kHz grid.'));
+    console.log(c(DIM, '    The Q branch works and reception is good. Phase 2 is worth building.'));
+  } else if (on_grid_stable.length >= 1) {
+    console.log(c(GREEN, '  ✓ THE Q BRANCH WORKS. ' + on_grid_stable.length + ' real AM carrier' +
+      (on_grid_stable.length === 1 ? '' : 's') + ' found:'));
+    on_grid_stable.forEach(function (p) {
+      console.log(c(GREEN, '      ' + p.khz.toFixed(0) + ' kHz, +' + (p.db - best.floor).toFixed(1) + ' dB over the floor'));
+    });
+    console.log(c(DIM, '\n    That is proof, not a hint: an alias cannot survive a sample-rate change, and'));
+    console.log(c(DIM, '    interference does not land on exact 10 kHz centres. The ADC pin is routed and'));
+    console.log(c(DIM, '    the whole chain works.'));
+    console.log(c(YELLOW, '\n    What is missing is antenna, not hardware.') +
+      c(DIM, ' A quarter wave at 1.5 MHz is ~50 m;'));
+    console.log(c(DIM, '    a 3-inch whip is electrically nothing there, so only the strongest carriers'));
+    console.log(c(DIM, '    get through. Several metres of wire toward a window should bring in many more.'));
+  } else if (off_grid_stable.length) {
+    console.log(c(YELLOW, '  ? Signals are present and stable, but none sit on the 10 kHz grid.'));
     console.log(c(DIM, '    That is interference — switching supplies, USB, LED drivers — not broadcast.'));
-    console.log(c(DIM, '    Most likely the antenna: a quarter wave at 1.5 MHz is ~50 m, so a 3-inch whip'));
-    console.log(c(DIM, '    is electrically nothing there. Clip several metres of wire to the antenna'));
-    console.log(c(DIM, '    centre, run it toward a window and away from the laptop, then re-run.'));
+    console.log(c(DIM, '    Antenna first: clip several metres of wire to the antenna centre, run it toward'));
+    console.log(c(DIM, '    a window and away from the laptop, then re-run.'));
   } else {
     console.log(c(YELLOW, '  ? Nothing survives the two-rate test.'));
     console.log(c(DIM, '    Everything above the noise moved when the sample rate changed, which makes it'));
     console.log(c(DIM, '    artefact rather than signal. Antenna first — see above. If a long wire changes'));
     console.log(c(DIM, '    nothing, an upconverter is the honest answer.'));
+  }
+
+  if (best.stable.length) {
+    console.log(c(DIM, '\n    Byte stream reads as: ') + c(BOLD, best.complex ? 'complex I/Q' : 'real samples') +
+      c(DIM, '   (settled — phase 2 needs this)'));
+  }
+  if (off_grid_stable.length && on_grid_stable.length) {
+    console.log(c(DIM, '    Off-grid and stable (' +
+      off_grid_stable.map(function (p) { return p.khz.toFixed(0); }).join(', ') +
+      ' kHz) is local interference, not a station.'));
   }
   console.log('');
   return 0;
