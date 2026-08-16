@@ -333,6 +333,57 @@ Three decisions worth keeping:
 Menu numbers are now assigned by position rather than written into each item, so inserting a section
 no longer means renumbering by hand. Tests pin id uniqueness and that every advertised doc exists.
 
+## Retention + the meter selector (2026-08-04)
+
+**Every table now has a bound, and other people's meters have their own.**
+
+| Table | Retention |
+|---|---|
+| `water_hourly` | **NEW** `hourly_retention_days`, default 0 = forever (~1 MB/meter/yr) |
+| `water_readings` | `readings_retention_days`, default forever |
+| `water_reception` | `reception_retention_days`, 14 |
+| `water_packets` | `packets_retention_days`, 1 |
+| `water_alerts` | `alerts_retention_days`, forever |
+| `water_raw_samples` | `raw_sample_keep`, 500 rows |
+| **any meter that is not ours** | **NEW** `observed_retention_days`, **45**, a CEILING over all of the above |
+
+Three decisions worth keeping:
+
+- **The hourly rollup has a floor, enforced twice.** It is the table every chart and every leak
+  rule reads, so short retention there does not cost detail -- it stops the monitor being able to
+  detect things. `check_continuous` needs six consecutive hours, the overnight rule needs last
+  night, the daily summary needs yesterday. Values below 7 days are refused on save AND again inside
+  `prune_hourly`, so a row edited straight into `water_settings` by hand cannot quietly disarm a
+  rule. `min_nonzero` was added to the settings schema for this: `min` alone cannot express "0 means
+  forever but 1 is invalid".
+- **The observed ceiling can shorten but never extend.** It runs last in the sweep, after every
+  per-table rule has had its say, so transmissions still expire at their own 1-day setting whatever
+  it says. It is keyed by `meter_id <> owned` rather than by a flag, so there is no state to drift.
+- **It refuses to run without an owned meter id.** A missing id would make `meter_id <> NULL` match
+  nothing in SQL, which happens to be safe -- but relying on that subtlety, when the blast radius is
+  deleting the history this app exists to keep, is not a design.
+
+**The meter selector** replaced the This meter / All meters toggle in the Real time toolbar. Same
+pill, same position, one more capability -- the UI shape did not change.
+
+- New **`water_meters`** registry, populated automatically from the packet flush. It exists because
+  `water_packets` is pruned within a day: a list derived from packets loses any meter that went
+  quiet overnight, and options that come and go read as a bug rather than as reception.
+- Carries `label`, `owned`, `collect_readings` and **`gallons_per_unit` per meter** -- classic Orion
+  endpoints count 1 gallon, newer ones 0.1, and applying the wrong factor is a silent 10x error that
+  looks entirely plausible on a chart.
+- `?meter=` now accepts `mine`, `all`, or **a specific id**, resolved server-side into the same
+  `(meter_id, scope)` pair the queries already took. No SQL changed.
+- Decode rate, gaps and interval follow the SELECTION rather than always meaning "ours", so a
+  neighbour's stats describe the neighbour instead of reporting a flat zero. On "all meters" they
+  still mean your meter -- mixing several endpoints' arrival times into one median describes no real
+  transmitter.
+- Meters with no data are shown disabled with the reason, rather than offering a choice that
+  produces an empty chart. An empty chart is indistinguishable from a broken one.
+
+**Only the Real time tab is wired.** Heartbeat, Long view, History and Alerts still read owned-meter
+data because `ingest.js` still filters to one meter -- that is Step 2 in `MULTI_METER_PLAN.md`.
+
 ## Open items
 
 1. **Tune `overnight_threshold_gal`.** Currently 3 gal, which is a guess. An ice maker, a

@@ -65,4 +65,5 @@ export const api = {
   waterReception: (minutes) => jget('/api/water/reception?minutes=' + (minutes || 60)),
   waterMeter: (q) => jget('/api/water/meter?' + new URLSearchParams(q).toString()),
   waterPackets: (q) => jget('/api/water/packets?' + new URLSearchParams(q).toString()),
+  waterMeters: () => jget('/api/water/meters'),
 };

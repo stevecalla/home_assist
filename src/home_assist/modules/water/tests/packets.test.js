@@ -222,8 +222,15 @@ test('the decode rate is measured against the window, not the fetched slice', fu
   const block = api.slice(api.indexOf("app.get('/api/water/packets'"), api.indexOf("// ── reception:"));
 
   assert.match(block, /readings\.packet_count\(/, 'the endpoint must COUNT the window');
-  assert.match(block, /decode: rules\.decode_rate\(\{ length: counts\.ours \}/,
+  // Pinned by SHAPE rather than by one literal, so per-meter selection could be added without
+  // loosening the invariant. `focus_total` is chosen from `counts`; what must never happen is
+  // feeding decode_rate the length of the fetched array.
+  assert.match(block, /const focus_total = .*counts\.(ours|total)/,
+    'the denominator must come from the window count');
+  assert.match(block, /decode: rules\.decode_rate\(\{ length: focus_total \}/,
     'decode_rate must be fed the window COUNT, not the returned array');
+  assert.doesNotMatch(block, /decode_rate\(\{ length: (packets|focus|ours|rows)\.length \}/,
+    'the returned array length is a LIMIT clause, not a measurement');
   assert.match(block, /truncated: counts\.total > packets\.length/,
     'the response must say when it returned less than the window holds');
 

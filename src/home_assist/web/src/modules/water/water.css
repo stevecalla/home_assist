@@ -665,6 +665,41 @@
 }
 .w-filt button + button { border-left: 1px solid var(--line); }
 .w-filt button.on { background: var(--w-good); color: #fff; }
+
+/* The meter picker keeps the original two pills and adds a caret to the second one. Same shell,
+   same size — the only new thing is a small list that drops out of it. */
+.w-filt { position: relative; }
+.w-filt button.w-caret { padding: 4px 8px; font-size: 10px; line-height: 1; }
+.w-pick-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, #1b2130);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+}
+.w-pick-menu button {
+  border: 0; border-radius: 0; background: transparent; color: inherit;
+  font: inherit; font-size: 12px; text-align: left;
+  padding: 7px 10px; cursor: pointer; white-space: nowrap;
+  display: flex; align-items: center; gap: 8px;
+}
+.w-pick-menu button + button { border-top: 1px solid var(--line); }
+.w-pick-menu button:hover:not(:disabled) { background: rgba(127, 127, 127, .14); }
+.w-pick-menu button.on { background: var(--w-good); color: #fff; }
+.w-pick-menu button:disabled { opacity: .45; cursor: default; }
+.w-pick-menu .w-mine,
+.w-pick-menu .w-nodata {
+  margin-left: auto; font-style: normal; font-size: 10px; opacity: .7; text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.w-pick-empty { padding: 8px 10px; font-size: 12px; opacity: .7; }
 .w-mem {
   font-size: 11px; color: var(--muted); background: var(--bg);
   border: 1px solid var(--line); border-radius: 7px; padding: 2px 9px;

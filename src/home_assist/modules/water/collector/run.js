@@ -22,6 +22,7 @@ const schema = require('../../../store/schema');
 const time = require('../../../time');
 const settings = require('../store/settings');
 const readings = require('../store/readings');
+const meters = require('../store/meters');
 const alerts = require('../store/alerts');
 const rules = require('../rules/leak_rules');
 const ingest = require('./ingest');
@@ -232,6 +233,8 @@ async function create_collector(options) {
       const st = time.stamps(new Date());
       packet_buf.push({
         meter_id: pid,
+        // Carried for the registry only -- record_packets maps columns explicitly and ignores it.
+        model: typeof msg.model === 'string' ? msg.model : null,
         heard_at_utc: st.utc_ms || st.utc,
         heard_at_mtn: st.local_ms || st.local,
         is_ours: ours_now,
@@ -421,9 +424,15 @@ async function create_collector(options) {
     const old_alerts = await readings.prune_alerts(cfg.alerts_retention_days);
     const old_rx = await readings.prune_reception(cfg.reception_retention_days);
     const old_pk = await readings.prune_packets(cfg.packets_retention_days);
-    if (raw || old_readings || old_alerts || old_rx || old_pk) {
+    const old_hr = await readings.prune_hourly(cfg.hourly_retention_days);
+    // Runs LAST and deliberately: it is a ceiling on other people's meters, applied after every
+    // per-table rule has had its say, so it can only ever remove more -- never keep something the
+    // table's own retention would have dropped.
+    const old_ob = await readings.prune_observed(cfg.observed_retention_days, cfg.meter_id);
+    if (raw || old_readings || old_alerts || old_rx || old_pk || old_hr || old_ob) {
       log('retention sweep: removed ' + raw + ' raw, ' + old_readings + ' readings, ' +
-        old_alerts + ' alerts, ' + old_rx + ' reception rows, ' + old_pk + ' packets');
+        old_alerts + ' alerts, ' + old_rx + ' reception rows, ' + old_pk + ' packets, ' +
+        old_hr + ' hourly, ' + old_ob + ' observed-meter rows');
     }
   }
 
@@ -454,12 +463,27 @@ async function create_collector(options) {
     packet_buf = [];
     try {
       await readings.record_packets(batch);
+      // Register whatever we just heard. Piggy-backing on the flush rather than running its own
+      // timer means the registry is updated exactly as often as there is something to register,
+      // and one extra statement per flush -- not one per packet.
+      const tally = new Map();
+      for (const p of batch) {
+        const e = tally.get(p.meter_id) || { meter_id: p.meter_id, model: p.model || null, packets: 0 };
+        e.packets += 1;
+        tally.set(p.meter_id, e);
+      }
+      await meters.record_heard(Array.from(tally.values()), meter_id);
     } catch (e) {
       console.error('packet flush failed: ' + e.message);
     } finally {
       flushing = false;
     }
   }
+
+  // The configured meter belongs in the registry before a single packet arrives, or the selector is
+  // empty for the first minute of a fresh install -- and "no meters" looks exactly like a dead
+  // receiver at the moment someone is most likely to be watching.
+  await meters.ensure_owned(meter_id);
 
   const timer = setInterval(function () { tick(); }, TICK_MS);
   const packet_timer = setInterval(function () { flush_packets(); }, PACKET_FLUSH_MS);
