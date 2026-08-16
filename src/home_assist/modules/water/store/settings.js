@@ -156,6 +156,26 @@ const DEFS = {
     label: 'Keep transmissions for (days)',
     help: 'About 2 MB per day for your meter alone, or 6 MB with two neighbours in range. Pruned hourly, so the size is set by this number and not by usage.',
   },
+  hourly_retention_days: {
+    type: 'int', def: 0, group: 'Retention', min: 0, min_nonzero: 7,
+    label: 'Keep the hourly rollup for (days)',
+    help: '0 = forever, and forever is cheap: 8,760 rows and about 1 MB per meter per YEAR. This ' +
+      'is the table every chart and every leak rule reads, so it is the one place where trimming ' +
+      'costs capability rather than disk. A value below 7 is refused -- the continuous-flow rule ' +
+      'needs six hours, the overnight rule needs last night, and the daily summary needs ' +
+      'yesterday, so a short retention here would silently stop the monitor detecting the leaks ' +
+      'it exists to detect. Long view ranges beyond this simply run out of data.',
+  },
+  observed_retention_days: {
+    type: 'int', def: 45, group: 'Retention', min: 1, max: 3650,
+    label: 'Keep OTHER meters\' history for (days)',
+    help: 'A CEILING on every table, applied only to meters that are not yours. It can shorten ' +
+      'but never extend -- transmissions still expire at their own 1-day setting. Your meter is ' +
+      'unaffected. This exists because the hourly rollup is otherwise permanent, and a permanent ' +
+      'record of when the neighbours shower, sleep and travel is a different thing from the ' +
+      'antenna diagnostics the capture was added for. Bounded by a setting rather than by ' +
+      'intention.',
+  },
   reception_retention_days: {
     type: 'int', def: 14, group: 'Retention', min: 0,
     label: 'Keep the reception log for (days)',
@@ -250,6 +270,23 @@ async function all(opts) {
   return base;
 }
 
+/**
+ * Range enforcement for a saved value.
+ *
+ * `min_nonzero` exists for settings where 0 means "unlimited" and any positive value has a floor.
+ * A plain `min` cannot express that: min:7 would forbid 0, and min:0 would allow 1 -- and 1 day of
+ * hourly history starves the continuous-flow rule, which needs six hours of buckets to see
+ * anything. The floor is enforced again at the point of pruning, so a row edited straight into the
+ * database by hand cannot quietly disarm a leak rule either.
+ */
+function clamp(d, v) {
+  if (typeof v !== 'number') return v;
+  if (d.min !== undefined && v < d.min) v = d.min;
+  if (d.max !== undefined && v > d.max) v = d.max;
+  if (d.min_nonzero !== undefined && v > 0 && v < d.min_nonzero) v = d.min_nonzero;
+  return v;
+}
+
 async function set_many(patch, who) {
   const now = new Date();
   const stamp = time.sql_utc(now);
@@ -257,9 +294,7 @@ async function set_many(patch, who) {
   const entries = Object.keys(patch || {}).filter(function (k) { return DEFS[k]; });
   for (const name of entries) {
     const d = DEFS[name];
-    let v = coerce(d.type, patch[name], DEFS[name].def);
-    if (d.min !== undefined && typeof v === 'number' && v < d.min) v = d.min;
-    if (d.max !== undefined && typeof v === 'number' && v > d.max) v = d.max;
+    let v = clamp(d, coerce(d.type, patch[name], DEFS[name].def));
     await db.query(
       // created_at_* stays out of the ON DUPLICATE clause: a setting edited ten times was still
       // created once, and "when did this row first appear?" is the question it exists to answer.
@@ -298,11 +333,11 @@ function describe(values) {
     return {
       name: name, value: values ? values[name] : undefined, type: d.type,
       label: d.label, help: d.help || '', group: d.group,
-      min: d.min, max: d.max, default: d.def,
+      min: d.min, max: d.max, min_nonzero: d.min_nonzero, default: d.def,
     };
   });
 }
 
 function invalidate() { _cache = null; }
 
-module.exports = { DEFS, defaults, all, set_many, seed_missing, describe, invalidate, coerce };
+module.exports = { DEFS, defaults, all, set_many, seed_missing, describe, invalidate, coerce, clamp };

@@ -319,6 +319,68 @@ async function prune_readings(days) {
   } catch (e) { return 0; }
 }
 
+/**
+ * Retention for the HOURLY ROLLUP -- the one table that had none.
+ *
+ * This is what every chart and every leak rule reads, which makes it the only place where trimming
+ * costs capability instead of disk. It is also cheap to keep: 8,760 rows and about 1 MB per meter
+ * per year, so 0 (forever) is the sensible default and the setting exists for people who disagree.
+ *
+ * THE FLOOR IS ENFORCED HERE, not only in the Settings page. `check_continuous` needs six
+ * consecutive hourly buckets, `check_overnight` needs last night, and the daily summary needs
+ * yesterday -- so a retention of 1 or 2 days would leave the collector running, the dashboard
+ * green, and the rules unable to see far enough back to fire. That is the silent-downgrade failure
+ * this codebase keeps guarding against, so a value below the floor is treated as "off" rather than
+ * honoured.
+ */
+const HOURLY_MIN_DAYS = 7;
+
+async function prune_hourly(days) {
+  const d = Number(days) || 0;
+  if (d <= 0) return 0;
+  if (d < HOURLY_MIN_DAYS) return 0;                  // refuse to starve the rules
+  try {
+    // hour_key is a zero-padded LOCAL 'YYYY-MM-DDTHH', so a string compare is a time compare.
+    const cutoff = time.hour_key_offset(new Date(), d * 24);
+    const r = await db.query('DELETE FROM water_hourly WHERE hour_key < ? LIMIT 50000', [cutoff]);
+    return r && r.affectedRows ? r.affectedRows : 0;
+  } catch (e) { return 0; }
+}
+
+/**
+ * A ceiling on how long OTHER people's meters are kept, across every table that stores per-meter
+ * data. Applied on top of the per-table settings, so it can shorten a retention but never extend
+ * one -- transmissions still expire at `packets_retention_days` whatever this says.
+ *
+ * The reason it exists: the hourly rollup is otherwise permanent, so capturing neighbours for
+ * antenna work quietly turned into an indefinite archive of when other households shower, sleep and
+ * travel. Those are different activities and only one of them was ever intended.
+ *
+ * `owned` is excluded by id rather than by a flag, so there is no state to get out of sync -- your
+ * meter is whichever id the collector is configured for.
+ */
+async function prune_observed(days, owned_meter_id) {
+  const d = Number(days) || 0;
+  const owned = Number(owned_meter_id) || 0;
+  if (d <= 0 || !owned) return 0;
+  const cutoff = time.sql_utc(new Date(Date.now() - d * 86400 * 1000));
+  const hour_cutoff = time.hour_key_offset(new Date(), d * 24);
+  let removed = 0;
+  const jobs = [
+    ['DELETE FROM water_readings  WHERE meter_id <> ? AND read_at_utc  < ? LIMIT 50000', cutoff],
+    ['DELETE FROM water_reception WHERE meter_id <> ? AND minute_utc   < ? LIMIT 50000', cutoff],
+    ['DELETE FROM water_packets   WHERE meter_id <> ? AND heard_at_utc < ? LIMIT 50000', cutoff],
+    ['DELETE FROM water_hourly    WHERE meter_id <> ? AND hour_key     < ? LIMIT 50000', hour_cutoff],
+  ];
+  for (const [sql, bound] of jobs) {
+    try {
+      const r = await db.query(sql, [owned, bound]);
+      removed += r && r.affectedRows ? r.affectedRows : 0;
+    } catch (e) { /* best-effort; retention must never break the collector */ }
+  }
+  return removed;
+}
+
 /** Same idea for alert history — 0 keeps everything (a few hundred rows a year). */
 async function prune_alerts(days) {
   const d = Number(days) || 0;
@@ -431,7 +493,7 @@ async function recent_readings(meter_id, limit) {
 
 module.exports = {
   insert_reading, bump_hour, save_state, get_state, log_raw,
-  prune_raw, prune_readings, prune_alerts, table_sizes,
+  prune_raw, prune_readings, prune_alerts, prune_hourly, prune_observed, HOURLY_MIN_DAYS, table_sizes,
   record_reception, reception_series, prune_reception, daily_series_range,
   record_packets, packet_series, packet_count, meters_heard, prune_packets,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,

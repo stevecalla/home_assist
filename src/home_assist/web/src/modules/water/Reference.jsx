@@ -337,7 +337,9 @@ export default function Reference() {
               <td><code>water_hourly</code></td>
               <td>One hour of use. Every chart and every leak rule reads this.</td>
               <td>8,760</td>
-              <td><strong>Forever</strong> — ~1 MB/yr. Never worth pruning.</td>
+              <td>{ref.retention.hourly_retention_days
+                ? <strong>{ref.retention.hourly_retention_days} days</strong>
+                : <><strong>Forever</strong> — ~1 MB/yr. Rarely worth pruning.</>}</td>
             </tr>
             <tr>
               <td><code>water_readings</code></td>
@@ -366,6 +368,13 @@ export default function Reference() {
                 {(ref.retention.packets_retention_days || 1) === 1 ? '' : 's'}</strong> — about{' '}
                 {((ref.retention.packets_retention_days || 1) * 21600).toLocaleString()} rows a day
                 for your meter, roughly 3× that with two neighbours in range. ~2 MB/day.</td>
+            </tr>
+            <tr>
+              <td className="muted"><em>other meters, every table</em></td>
+              <td>A ceiling applied to any meter that is not yours. It can shorten a retention but
+                never extend one.</td>
+              <td className="muted">—</td>
+              <td><strong>{ref.retention.observed_retention_days || 45} days</strong></td>
             </tr>
             <tr>
               <td><code>water_alerts</code></td>
@@ -404,6 +413,22 @@ export default function Reference() {
           two weeks costs nothing.
         </p>
         <p className="w-chart-sub small" style={{ marginTop: 6 }}>
+          <strong>The hourly rollup has a floor.</strong> It is the table every chart and every leak
+          rule reads, so a short retention there does not just cost detail — it stops the monitor
+          being able to detect things. The continuous-flow rule needs six consecutive hours, the
+          overnight rule needs last night, and the daily summary needs yesterday. Any value below
+          <strong> 7 days</strong> is refused, both on this page and again at the moment of pruning,
+          so a value edited straight into the database cannot quietly disarm a rule either. Long view
+          ranges beyond the retention simply run out of data rather than showing zeros.
+        </p>
+        <p className="muted small">
+          <strong>Other meters are bounded separately.</strong> Neighbouring meters are captured for
+          antenna comparison — signal strength, decode rates, gap analysis. The hourly rollup is
+          otherwise permanent, which would turn that into an indefinite record of when other
+          households use water. The ceiling above keeps the diagnostic value and bounds the rest;
+          your own meter is unaffected, and no other meter can ever raise an alert.
+        </p>
+        <p className="muted small">
           <strong>Do not</strong> set alert retention below the longest cooldown ({dur(20 * 60)}) —
           that table is also the cooldown ledger, so pruning it too aggressively would let an alert
           repeat immediately.

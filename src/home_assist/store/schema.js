@@ -82,6 +82,8 @@ const SHORT = {
     "Tunable thresholds, editable from the Settings page. DB row > .env > built-in default. Not cleared by water_reset.",
   water_raw_samples:
     "Rolling buffer of raw rtl_433 lines for decoder field-name forensics. A diagnostic buffer, not an archive -- pruned hourly.",
+  water_meters:
+    "One row per meter ever heard: label, model, whether it is yours, and when it was first and last seen. The source of truth for the meter selector.",
   water_packets:
     "Every decoded transmission, one row each, every meter in range -- the granular near-real-time view. Neighbours are captured for antenna work and never counted. Bounded by a short prune.",
 };
@@ -91,6 +93,9 @@ const PURPOSE_RECEPTION =
 
 const PURPOSE_PACKETS =
   'Every Badger Orion transmission the decoder resolved -- ours and the neighbours -- one row each, at whole-second precision with the signal figures from -M level. This is the granular, near-real-time view: what the radio actually received, before any aggregation. Rows for other meters are captured for antenna work ONLY; they never advance an odometer, never enter a leak rule and never raise an alert. Bounded by packets_retention_days (default 1), so its size is set by the clock and not by how much water you use.';
+
+const PURPOSE_METERS =
+  'The registry of every meter this receiver has ever decoded, added automatically the first time one is heard. It exists so the UI has a stable list to offer -- water_packets is pruned within a day, so a meter that went quiet this morning would otherwise vanish from the dropdown and look like it never existed. `owned` marks the meter the leak rules and alerts run for; everything else is observed, kept for antenna comparison, and bounded by observed_retention_days. `gallons_per_unit` lives here per meter because Badger classic endpoints count 1 gallon and newer ones count 0.1 -- applying the wrong one is a silent 10x error that looks entirely plausible.';
 
 const TABLES = [
   {
@@ -248,6 +253,29 @@ const TABLES = [
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
   {
+    name: 'water_meters',
+    short: SHORT.water_meters,
+    purpose_after: 'meter_id',
+    purpose: PURPOSE_METERS,
+    ddl: `CREATE TABLE IF NOT EXISTS water_meters (
+     meter_id         BIGINT UNSIGNED NOT NULL,
+     purpose ${PURPOSE_COL}'${SHORT.water_meters}',
+     label            VARCHAR(64)     NULL COMMENT 'human name for the selector; NULL = show the id',
+     model            VARCHAR(32)     NULL COMMENT 'as reported by the decoder, e.g. Badger-ORION',
+     owned            TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = the meter leak rules and alerts run for',
+     collect_readings TINYINT(1)      NOT NULL DEFAULT 0 COMMENT 'store readings/hourly for it, not just packets',
+     gallons_per_unit DECIMAL(10,4)   NOT NULL DEFAULT 1 COMMENT 'classic Orion counts 1 gal; newer endpoints 0.1. Wrong value = silent 10x error',
+     first_heard_utc  DATETIME        NULL,
+     first_heard_mtn  DATETIME        NULL,
+     last_heard_utc   DATETIME        NULL,
+     last_heard_mtn   DATETIME        NULL,
+     packets_seen     BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'lifetime count, so the selector can order by how well we hear each one',${CREATED_AT},
+     PRIMARY KEY (meter_id),
+     KEY idx_last_heard (last_heard_utc)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  },
+
+  {
     name: 'water_packets',
     short: SHORT.water_packets,
     purpose_after: 'heard_at_utc',
@@ -298,6 +326,9 @@ const ADDED_COLUMNS = [
   ['water_packets', 'purpose', purpose_def(SHORT.water_packets, 'heard_at_utc')],
   ['water_packets', 'created_at_mtn', 'DATETIME NULL'],
   ['water_packets', 'created_at_utc', 'DATETIME NULL'],
+  ['water_meters', 'purpose', purpose_def(SHORT.water_meters, 'meter_id')],
+  ['water_meters', 'created_at_mtn', 'DATETIME NULL'],
+  ['water_meters', 'created_at_utc', 'DATETIME NULL'],
   ['water_raw_samples', 'purpose', purpose_def(SHORT.water_raw_samples, 'id')],
   ['water_readings', 'created_at_mtn', CREATED_MTN],
   ['water_readings', 'created_at_utc', CREATED_UTC],

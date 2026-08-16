@@ -11,6 +11,7 @@ const db = require('../../store/db');
 const schema = require('../../store/schema');
 const settings = require('./store/settings');
 const readings = require('./store/readings');
+const meters = require('./store/meters');
 const alerts = require('./store/alerts');
 const rules = require('./rules/leak_rules');
 const mailer = require('../../notify/mailer');
@@ -24,6 +25,31 @@ function guard(fn) {
       res.status(500).json({ ok: false, error: e.message });
     });
   };
+}
+
+/**
+ * Resolve the `?meter=` selector.
+ *
+ * Three shapes, and the third is the new one:
+ *   'mine' (or absent)  your meter
+ *   'all'               no meter filter
+ *   a numeric id        that meter only
+ *
+ * Deliberately resolved to the SAME (meter_id, scope) pair the queries already took, so adding a
+ * per-meter selection changed no SQL at all -- 'mine' with a different id is exactly what the store
+ * layer was already doing. An unknown id simply returns no rows, which is the right answer and
+ * leaks nothing about which meters exist.
+ */
+function resolve_meter(raw, cfg) {
+  const s = String(raw === undefined || raw === null ? '' : raw).trim();
+  if (s === 'all') return { scope: 'all', meter_id: cfg.meter_id, selection: 'all' };
+  if (/^[0-9]{1,20}$/.test(s)) {
+    const id = Number(s);
+    if (id > 0 && Number.isSafeInteger(id)) {
+      return { scope: 'mine', meter_id: id, selection: String(id) };
+    }
+  }
+  return { scope: 'mine', meter_id: cfg.meter_id, selection: 'mine' };
 }
 
 function keys_for_today(now, tz) {
@@ -141,6 +167,8 @@ function mount(app) {
       retention: {
         raw_sample_keep: cfg.raw_sample_keep,
         readings_retention_days: cfg.readings_retention_days,
+        hourly_retention_days: cfg.hourly_retention_days,
+        observed_retention_days: cfg.observed_retention_days,
         reception_retention_days: cfg.reception_retention_days,
         packets_retention_days: cfg.packets_retention_days,
         alerts_retention_days: cfg.alerts_retention_days,
@@ -240,16 +268,17 @@ function mount(app) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
-    const scope = req.query.meter === 'all' ? 'all' : 'mine';
+    const sel = resolve_meter(req.query.meter, cfg);
+    const scope = sel.scope;
     const hours = Math.max(0.05, Math.min(Number(req.query.hours) || 1, cfg.packets_retention_days * 24));
 
     // The fetch limit is a RENDER and TRANSFER limit, not a claim about the window. Everything
     // downstream that reasons about coverage uses `counts`, not the length of this array.
     const LIMIT = Math.max(1, Math.min(Number(req.query.limit) || 3000, 20000));
     const [rows, heard, counts] = await Promise.all([
-      readings.packet_series(cfg.meter_id, hours, scope, LIMIT),
+      readings.packet_series(sel.meter_id, hours, scope, LIMIT),
       readings.meters_heard(hours),
-      readings.packet_count(cfg.meter_id, hours, scope),
+      readings.packet_count(sel.meter_id, hours, scope),
     ]);
 
     const packets = rows.map(function (r) {
@@ -268,8 +297,15 @@ function mount(app) {
       };
     });
 
-    const ours = packets.filter(function (p) { return p.is_ours; });
-    const interval = rules.median_interval(ours);
+    // The stats below are about the meter IN FOCUS, which is not always yours any more. On "all
+    // meters" that stays your meter -- mixing several endpoints' arrival times into one median
+    // interval would describe no real transmitter. On a specific selection it is that meter, so a
+    // neighbour's decode rate and gaps describe the neighbour rather than reporting a flat zero.
+    const focus = sel.selection === 'all'
+      ? packets.filter(function (p) { return p.is_ours; })
+      : packets;
+    const focus_total = sel.selection === 'all' ? counts.ours : counts.total;
+    const interval = rules.median_interval(focus);
 
     const window_seconds = Math.round(hours * 3600);
     const first_at = counts.first_utc
@@ -305,9 +341,11 @@ function mount(app) {
       // three of these twenty-four hours". Same number, opposite conclusions, and the alarming one
       // was the one on screen. Coverage and reception are different facts and now they are two
       // different fields.
-      decode: rules.decode_rate({ length: counts.ours }, interval, coverage.seconds),
+      decode: rules.decode_rate({ length: focus_total }, interval, coverage.seconds),
       coverage: coverage,
-      meter_id: cfg.meter_id,
+      meter_id: sel.meter_id,
+      own_meter_id: cfg.meter_id,
+      selection: sel.selection,
       enabled: !!cfg.packets_enabled,
       capture_all: !!cfg.packets_capture_all_meters,
       retention_days: cfg.packets_retention_days,
@@ -316,7 +354,7 @@ function mount(app) {
       // number that matters for "how many did I miss" is what THIS endpoint actually does at THIS
       // antenna — and that is only knowable by looking.
       interval_seconds: interval,
-      gaps: rules.gap_spans(ours, interval),
+      gaps: rules.gap_spans(focus, interval),
       packets: packets,
       meters: heard.map(function (m) {
         return {
@@ -333,8 +371,24 @@ function mount(app) {
       // signal quality can never disagree about what "weak" means.
       quality: rules.SIGNAL_QUALITY,
       columns: PACKET_COLUMNS,
-      sql: packets_sql(cfg.meter_id, hours, scope),
+      sql: packets_sql(sel.meter_id, hours, scope),
       now: now.toISOString(),
+    });
+  }));
+
+  // ── the meter selector's list ──────────────────────────────────────────────────────────────
+  //
+  // Panel 'water', not 'water-admin': choosing which meter you are looking at is not an
+  // administrative act. Served from water_meters rather than derived from water_packets, because
+  // packets are pruned within a day and a dropdown whose options vanish overnight reads as a bug.
+  app.get('/api/water/meters', require_panel('water'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const list = await meters.list();
+    res.json({
+      ok: true,
+      own_meter_id: cfg.meter_id,
+      observed_retention_days: cfg.observed_retention_days,
+      meters: list,
     });
   }));
 

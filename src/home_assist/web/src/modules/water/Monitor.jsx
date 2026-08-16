@@ -113,7 +113,28 @@ export default function Monitor() {
   const [rt, setRt] = useState(null);
   const [rtMin, setRtMin] = useState(15);
   const [rtRowLimit, setRtRowLimit] = useState(RT_ROWS_DEFAULT);
+  // 'mine' | 'all' | a meter id as a string. The API resolves all three to the same
+  // (meter_id, scope) pair the queries already took, so this stayed a one-line change.
   const [rtScope, setRtScope] = useState('mine');
+  const [meterList, setMeterList] = useState(null);
+  const [pickOpen, setPickOpen] = useState(false);
+
+  // The pill shows the chosen meter's name, not a raw id, once one has a label.
+  function meterLabel(id) {
+    const m = (meterList || []).find((x) => String(x.meter_id) === String(id));
+    return (m && m.label) || id;
+  }
+
+  // The selector's options come from water_meters, not from the packets just fetched. Packets are
+  // pruned within a day, so a list derived from them loses any meter that went quiet overnight --
+  // options that come and go read as a bug in the app rather than as reception.
+  useEffect(() => {
+    let live = true;
+    api.waterMeters().then((r) => {
+      if (live && r.status === 200 && r.body.ok) setMeterList(r.body.meters);
+    });
+    return () => { live = false; };
+  }, []);
   const [tail, setTail] = useState([]);
   // A 1-second tick, used only to age the "last packet" counter. The data poll stays at 5s — this
   // is about the DISPLAY being visibly alive, not about asking the server more often.
@@ -455,9 +476,48 @@ export default function Monitor() {
               ))}
               {/* A display filter. What gets CAPTURED is packets_capture_all_meters in Settings —
                   flipping this never changes what is stored. */}
+              {/* The original two pills, unchanged — with the second one split so it can also be a
+                  specific meter. Left half sets the scope, the caret opens the list. A plain
+                  <select> replaced both pills and lost the at-a-glance "which of the two am I on",
+                  which was the point of a two-state control in the first place. */}
               <span className="w-filt">
-                <button type="button" className={rtScope === 'mine' ? 'on' : ''} onClick={() => setRtScope('mine')}>This meter</button>
-                <button type="button" className={rtScope === 'all' ? 'on' : ''} onClick={() => setRtScope('all')}>All meters</button>
+                <button type="button"
+                        className={rtScope === 'mine' ? 'on' : ''}
+                        onClick={() => { setRtScope('mine'); setPickOpen(false); }}>
+                  This meter
+                </button>
+                <button type="button"
+                        className={rtScope !== 'mine' ? 'on' : ''}
+                        onClick={() => { setRtScope('all'); setPickOpen(false); }}
+                        title="Every meter the radio hears, mixed into one table">
+                  {rtScope === 'mine' || rtScope === 'all' ? 'All meters' : meterLabel(rtScope)}
+                </button>
+                <button type="button"
+                        className={'w-caret' + (pickOpen ? ' on' : '')}
+                        aria-label="Pick a meter"
+                        title="Pick one meter"
+                        onClick={() => setPickOpen((v) => !v)}>▾</button>
+                {pickOpen ? (
+                  <span className="w-pick-menu" onMouseLeave={() => setPickOpen(false)}>
+                    <button type="button"
+                            className={rtScope === 'all' ? 'on' : ''}
+                            onClick={() => { setRtScope('all'); setPickOpen(false); }}>
+                      All meters
+                    </button>
+                    {(meterList || []).map((m) => (
+                      <button key={m.meter_id} type="button"
+                              className={rtScope === String(m.meter_id) ? 'on' : ''}
+                              disabled={!m.has_packets}
+                              onClick={() => { setRtScope(String(m.meter_id)); setPickOpen(false); }}>
+                        {m.label || m.meter_id}
+                        {m.owned ? <i className="w-mine">mine</i> : null}
+                        {m.has_packets ? null : <i className="w-nodata">no data</i>}
+                      </button>
+                    ))}
+                    {meterList && meterList.length === 0
+                      ? <span className="w-pick-empty">No meters heard yet</span> : null}
+                  </span>
+                ) : null}
               </span>
               {/* Two different facts, so two tooltips. "Keeping" is a disk retention setting;
                   "in this window" is how many rows this view loaded. They sat next to each other
