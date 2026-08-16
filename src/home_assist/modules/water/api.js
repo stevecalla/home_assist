@@ -65,7 +65,13 @@ function mount(app) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
-    const meter_id = cfg.meter_id;
+    // The whole page follows the selection, so the banner, the run meter and the four tiles all
+    // describe the SAME meter. Rules are pure functions over hour buckets, so running them for a
+    // neighbour is a display calculation only — nothing here fires an alert. The collector, which
+    // does fire them, stays owned-only.
+    const sel = resolve_meter(req.query.meter, cfg);
+    const meter_id = sel.meter_id;
+    const is_owned = meter_id === cfg.meter_id;
 
     const [state, hours, recent] = await Promise.all([
       readings.get_state(meter_id),
@@ -79,9 +85,13 @@ function mount(app) {
     // MySQL DATETIMEs come back as strings (dateStrings) and are stored in UTC — append Z so the
     // browser gets an unambiguous instant rather than a local-time guess.
     const last_read_at = state && state.last_read_at_utc ? new Date(state.last_read_at_utc + 'Z') : null;
-    const heartbeat_at = state && state.last_heartbeat_utc ? new Date(state.last_heartbeat_utc + 'Z') : null;
+    // The collector's heartbeat is a property of the PROCESS, not of whichever meter you are
+    // looking at. Read it from the owned meter's row always, or selecting a neighbour would report
+    // the receiver as down.
+    const own_state = is_owned ? state : await readings.get_state(cfg.meter_id);
+    const heartbeat_at = own_state && own_state.last_heartbeat_utc ? new Date(own_state.last_heartbeat_utc + 'Z') : null;
 
-    const started_at = state && state.started_at_utc ? new Date(state.started_at_utc + 'Z') : null;
+    const started_at = own_state && own_state.started_at_utc ? new Date(own_state.started_at_utc + 'Z') : null;
     const run = rules.current_run(recent, now, cfg);
     // `run` is passed in so the banner cannot say "All clear" while the run meter says otherwise.
     const leak = rules.status({ hours, now, cfg, tz, last_read_at, started_at, run });
@@ -100,7 +110,10 @@ function mount(app) {
       now: now.toISOString(),
       tz: tz,
       meter_id: meter_id,
-      meter_name: cfg.meter_name || null,
+      own_meter_id: cfg.meter_id,
+      selection: sel.selection,
+      is_owned: is_owned,
+      meter_name: is_owned ? (cfg.meter_name || null) : null,
       // What is actually on the air. Read from the SAME resolved rtl_433 arguments the collector
       // launches with, not retyped here — if someone retunes the radio in .env, this line follows.
       // Worth showing because "no readings" has two very different causes, and one of them is
@@ -118,8 +131,8 @@ function mount(app) {
         last_read_at: last_read_at ? last_read_at.toISOString() : null,
         quiet_minutes: last_read_at ? Math.round((now - last_read_at) / 60000) : null,
         stale_minutes: cfg.stale_minutes,
-        radio_quiet: !!(state && state.radio_quiet),
-        mode: state ? state.collector_mode : null,
+        radio_quiet: !!(own_state && own_state.radio_quiet),
+        mode: own_state ? own_state.collector_mode : null,
         started_at: started_at ? started_at.toISOString() : null,
       },
       meter: {
@@ -192,7 +205,8 @@ function mount(app) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
-    const meter_id = cfg.meter_id;
+    const sel = resolve_meter(req.query.meter, cfg);
+    const meter_id = sel.meter_id;
     const mode = req.query.mode === 'long' ? 'long' : 'heartbeat';
 
     // 72h is a deliberate ceiling on the detailed mode: past that, per-minute rows stop being
@@ -215,6 +229,7 @@ function mount(app) {
         ? observed.reduce(function (a, d) { return a + d.gallons; }, 0) / observed.length : 0;
       return res.json({
         ok: true, mode, tz, days, live,
+        meter_id: meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
         series,
         summary: {
           total: series.reduce(function (a, d) { return a + d.gallons; }, 0),
@@ -242,13 +257,16 @@ function mount(app) {
 
     res.json({
       ok: true, mode, tz, hours, live,
+      meter_id: meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
       max_hours: HEARTBEAT_MAX_HOURS,
       series: rx.map(function (r) {
         return {
           minute_utc: new Date(r.minute_utc + 'Z').toISOString(),
           minute_mtn: r.minute_mtn,
           odometer: r.odometer === null ? null : Number(r.odometer),
-          packets: Number(r.packets_ours),
+          // packets_meter, not packets_ours: on a neighbour's row "ours" is zero by definition and
+          // the chart would draw a flatline that reads as "the radio heard nothing".
+          packets: Number(r.packets_meter),
           rssi: r.rssi_avg === null ? null : Number(r.rssi_avg),
           snr: r.snr_avg === null ? null : Number(r.snr_avg),
         };
@@ -395,10 +413,11 @@ function mount(app) {
   // ── reception: the persistent "is the radio hearing my meter" record ──
   app.get('/api/water/reception', require_panel('water'), guard(async function (req, res) {
     const cfg = await settings.all();
+    const sel = resolve_meter(req.query.meter, cfg);
     const minutes = Math.max(5, Math.min(Number(req.query.minutes) || 60, 1440));
     const [series, state] = await Promise.all([
-      readings.reception_series(cfg.meter_id, minutes),
-      readings.get_state(cfg.meter_id),
+      readings.reception_series(sel.meter_id, minutes),
+      readings.get_state(sel.meter_id),
     ]);
     const now = new Date();
     const last_read_at = state && state.last_read_at_utc ? new Date(state.last_read_at_utc + 'Z') : null;
@@ -406,7 +425,9 @@ function mount(app) {
       ok: true,
       tz: time.zone(),
       minutes: minutes,
-      meter_id: cfg.meter_id,
+      meter_id: sel.meter_id,
+      own_meter_id: cfg.meter_id,
+      selection: sel.selection,
       // Seconds since the last packet from OUR meter. This is the real-time number — the per-minute
       // series is the history behind it.
       seconds_since_last: last_read_at ? Math.max(0, Math.round((now - last_read_at) / 1000)) : null,
@@ -428,10 +449,12 @@ function mount(app) {
   // ── charts ──
   app.get('/api/water/hourly', require_panel('water'), guard(async function (req, res) {
     const cfg = await settings.all();
-    const series = await readings.hourly_series(cfg.meter_id, req.query.hours || 48);
+    const sel = resolve_meter(req.query.meter, cfg);
+    const series = await readings.hourly_series(sel.meter_id, req.query.hours || 48);
     res.json({
       ok: true,
       series: series,
+      meter_id: sel.meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
       overnight_window: [cfg.overnight_start_hour, cfg.overnight_end_hour],
       tz: time.zone(),
     });
@@ -439,13 +462,22 @@ function mount(app) {
 
   app.get('/api/water/daily', require_panel('water'), guard(async function (req, res) {
     const cfg = await settings.all();
-    const series = await readings.daily_series(cfg.meter_id, req.query.days || 30);
-    res.json({ ok: true, series: series, tz: time.zone() });
+    const sel = resolve_meter(req.query.meter, cfg);
+    const series = await readings.daily_series(sel.meter_id, req.query.days || 30);
+    res.json({
+      ok: true, series: series, tz: time.zone(),
+      meter_id: sel.meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+    });
   }));
 
   app.get('/api/water/readings', require_panel('water'), guard(async function (req, res) {
     const cfg = await settings.all();
-    res.json({ ok: true, readings: await readings.recent_readings(cfg.meter_id, req.query.limit || 25) });
+    const sel = resolve_meter(req.query.meter, cfg);
+    res.json({
+      ok: true,
+      meter_id: sel.meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+      readings: await readings.recent_readings(sel.meter_id, req.query.limit || 25),
+    });
   }));
 
   // ── alert history ──
@@ -518,11 +550,11 @@ function mount(app) {
 function heartbeat_sql(meter_id, hours) {
   return [
     { label: 'Reading + pulse', table: 'water_reception', text:
-      'SELECT minute_mtn, odometer, packets_ours\n' +
+      'SELECT minute_mtn, odometer, GREATEST(packets, packets_ours) AS packets_meter\n' +
       'FROM   water_reception\n' +
       'WHERE  meter_id   = ' + meter_id + '\n' +
       '  AND  minute_utc >= (UTC_TIMESTAMP() - INTERVAL ' + hours + ' HOUR)\n' +
-      'ORDER BY minute_utc;   -- odometer = the line, packets_ours = the pulse' },
+      'ORDER BY minute_utc;   -- odometer = the line, packets_meter = the pulse' },
     { label: 'Runs (the red bands)', table: 'water_readings', text:
       'SELECT read_at_utc, delta_gallons\n' +
       'FROM   water_readings\n' +

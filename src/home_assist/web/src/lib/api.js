@@ -51,10 +51,12 @@ export const api = {
   adminSetPanelAccess: (body) => jpost('/api/admin/panel-access', body),
 
   // water module — /api/water/*
-  waterStatus: () => jget('/api/water/status'),
-  waterHourly: (hours) => jget('/api/water/hourly?hours=' + (hours || 48)),
-  waterDaily: (days) => jget('/api/water/daily?days=' + (days || 30)),
-  waterReadings: (limit) => jget('/api/water/readings?limit=' + (limit || 25)),
+  // `meter` is the shared selector: 'mine' | 'all' | an id. Omitted it resolves to your own meter,
+  // so every existing caller keeps its old behaviour.
+  waterStatus: (meter) => jget('/api/water/status?meter=' + encodeURIComponent(meter || 'mine')),
+  waterHourly: (hours, meter) => jget('/api/water/hourly?hours=' + (hours || 48) + '&meter=' + encodeURIComponent(meter || 'mine')),
+  waterDaily: (days, meter) => jget('/api/water/daily?days=' + (days || 30) + '&meter=' + encodeURIComponent(meter || 'mine')),
+  waterReadings: (limit, meter) => jget('/api/water/readings?limit=' + (limit || 25) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterAlerts: (limit) => jget('/api/water/alerts?limit=' + (limit || 50)),
   waterSettings: () => jget('/api/water/settings'),
   waterSaveSettings: (patch) => jpost('/api/water/settings', patch),
@@ -62,7 +64,7 @@ export const api = {
   waterEmailCheck: () => jget('/api/water/email-check'),
   waterRaw: (limit) => jget('/api/water/raw?limit=' + (limit || 20)),
   waterReference: () => jget('/api/water/reference'),
-  waterReception: (minutes) => jget('/api/water/reception?minutes=' + (minutes || 60)),
+  waterReception: (minutes, meter) => jget('/api/water/reception?minutes=' + (minutes || 60) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterMeter: (q) => jget('/api/water/meter?' + new URLSearchParams(q).toString()),
   waterPackets: (q) => jget('/api/water/packets?' + new URLSearchParams(q).toString()),
   waterMeters: () => jget('/api/water/meters'),

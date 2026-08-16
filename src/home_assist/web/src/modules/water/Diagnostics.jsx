@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import BarChart from './BarChart.jsx';
+import MeterPicker from './MeterPicker.jsx';
+import { useMeterSel } from './meterSel.js';
 import './water.css';
 
 // Diagnostics — the page you open when the numbers look wrong.
@@ -30,19 +32,26 @@ export default function Diagnostics() {
   // Ticks every second purely so "3s ago" counts up smoothly between polls. Without it the number
   // freezes for 5 seconds at a time and looks stuck — which on THIS card is the exact wrong message.
   const [, setNowTick] = useState(0);
+  // The same selection every other water page uses. The raw-sample card below is NOT filtered by
+  // it: raw samples are the undecoded firehose, which is the whole point of that card.
+  const [sel, setSel] = useMeterSel();
+  const selId = /^[0-9]+$/.test(sel) ? Number(sel) : null;
 
   useEffect(() => {
     api.waterRaw(20).then((r) => { if (r.status === 200 && r.body.ok) setRaw(r.body.samples); });
-    api.waterReadings(40).then((r) => { if (r.status === 200 && r.body.ok) setReadings(r.body.readings); });
+  }, []);
 
-    const loadRx = () => api.waterReception(60).then((r) => {
+  useEffect(() => {
+    api.waterReadings(40, sel).then((r) => { if (r.status === 200 && r.body.ok) setReadings(r.body.readings); });
+
+    const loadRx = () => api.waterReception(60, sel).then((r) => {
       if (r.status === 200 && r.body.ok) setRx(r.body);
     });
     loadRx();
     const poll = setInterval(loadRx, 5000);
     const clock = setInterval(() => setNowTick((n) => n + 1), 1000);
     return () => { clearInterval(poll); clearInterval(clock); };
-  }, []);
+  }, [sel]);
 
   async function checkEmail() {
     setBusy(true);
@@ -54,7 +63,14 @@ export default function Diagnostics() {
   return (
     <div className="page w-root">
       <h2>Diagnostics</h2>
-      <p className="muted">For when the numbers look wrong and you need to see the plumbing.</p>
+      <p className="muted">
+        For when the numbers look wrong and you need to see the plumbing.
+        {selId !== null ? <b className="w-viewing"> · viewing {selId}</b> : null}
+      </p>
+      <div className="w-rangebar">
+        <span className="w-range-label">Meter</span>
+        <MeterPicker sel={sel} setSel={setSel} ownId={rx ? rx.own_meter_id : null} allowAll={false} />
+      </div>
 
       <div className="w-chart-card">
         <div className="w-chart-head"><h3 className="w-chart-title">Email channel</h3></div>

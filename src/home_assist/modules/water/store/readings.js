@@ -99,16 +99,18 @@ async function record_reception(meter_id, at, stats) {
   try {
     await db.query(
       'INSERT INTO water_reception (meter_id, minute_utc, minute_mtn, packets_total, packets_ours, ' +
-      'odometer, other_ids, rssi_avg, rssi_best, snr_avg, created_at_mtn, created_at_utc) ' +
-      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ' +
+      'packets, odometer, other_ids, rssi_avg, rssi_best, snr_avg, created_at_mtn, created_at_utc) ' +
+      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ' +
       'ON DUPLICATE KEY UPDATE packets_total = packets_total + VALUES(packets_total), ' +
-      'packets_ours = packets_ours + VALUES(packets_ours), other_ids = VALUES(other_ids), ' +
+      'packets_ours = packets_ours + VALUES(packets_ours), ' +
+      'packets = packets + VALUES(packets), other_ids = VALUES(other_ids), ' +
       // odometer is the LATEST value in the minute, not a sum — it is a running total already.
       'odometer = COALESCE(VALUES(odometer), odometer), ' +
       'rssi_avg = VALUES(rssi_avg), rssi_best = VALUES(rssi_best), snr_avg = VALUES(snr_avg)',
       [
         meter_id, s.utc, s.local,
         stats.packets_total || 0, stats.packets_ours || 0,
+        stats.packets === undefined || stats.packets === null ? (stats.packets_ours || 0) : stats.packets,
         stats.odometer === null || stats.odometer === undefined ? null : stats.odometer,
         stats.other_ids ? String(stats.other_ids).slice(0, 250) : null,
         stats.rssi_avg === null || stats.rssi_avg === undefined ? null : stats.rssi_avg,
@@ -127,7 +129,13 @@ async function reception_series(meter_id, minutes) {
   // axis — the range chip would say 72h and the picture would be a day.
   const n = Math.max(1, Math.min(Number(minutes) || 60, 4320));
   const rows = await db.query(
-    'SELECT minute_utc, minute_mtn, packets_total, packets_ours, odometer, other_ids, rssi_avg, rssi_best, snr_avg ' +
+    // GREATEST, not packets alone: rows written before the `packets` column existed have 0 there
+    // and the real count in packets_ours. Reading only the new column would turn every historical
+    // minute into a flatline -- which on this chart means "the radio heard nothing", the exact
+    // wrong conclusion.
+    'SELECT minute_utc, minute_mtn, packets_total, packets_ours, ' +
+    '       GREATEST(packets, packets_ours) AS packets_meter, ' +
+    '       odometer, other_ids, rssi_avg, rssi_best, snr_avg ' +
     'FROM water_reception WHERE meter_id = ? AND minute_utc >= (UTC_TIMESTAMP() - INTERVAL ? MINUTE) ' +
     'ORDER BY minute_utc',
     [meter_id, n]
@@ -381,6 +389,72 @@ async function prune_observed(days, owned_meter_id) {
   return removed;
 }
 
+/**
+ * Rebuild observed meters' hourly totals from the transmissions already on disk.
+ *
+ * The collector only started storing readings and hourly rows for OTHER meters recently; before
+ * that a neighbour's packets were captured but never rolled up. Selecting one in the picker would
+ * therefore draw an empty history beside a live packet feed -- "no data" where a day of data
+ * demonstrably exists, which reads as a broken chart rather than as a schema that changed.
+ *
+ * INSERT IGNORE, never UPDATE: an hour the live path has already written is authoritative and this
+ * must not touch it. That also makes the whole thing idempotent, so it can run on every collector
+ * start with no flag to keep in sync and no way to double-count.
+ *
+ * The hour's usage is the LAST odometer of the hour minus the last odometer of the previous hour --
+ * the same quantity the live path accumulates. Within-hour min/max would miss every gallon that
+ * crossed an hour boundary. Where no previous hour exists (the first hour on record) it falls back
+ * to max-min inside the hour, which under-reports rather than inventing water.
+ *
+ * `scale_of` maps meter_id -> gallons per raw unit. Packets store the RAW meter value.
+ */
+async function backfill_observed_hourly(owned_meter_id, scale_of) {
+  const owned = Number(owned_meter_id) || 0;
+  if (!owned) return 0;
+  let rows;
+  try {
+    rows = await db.query(
+      // The local hour key, built from heard_at_mtn so it matches what the live path writes. Using
+      // the UTC column would put every bucket in the wrong hour for seven months of the year.
+      "SELECT meter_id, CONCAT(LEFT(heard_at_mtn, 10), 'T', SUBSTRING(heard_at_mtn, 12, 2)) AS hour_key, " +
+      '       MIN(volume) AS lo, MAX(volume) AS hi, COUNT(*) AS n ' +
+      'FROM   water_packets ' +
+      'WHERE  meter_id <> ? AND volume IS NOT NULL ' +
+      'GROUP BY meter_id, hour_key ' +
+      'ORDER BY meter_id, hour_key',
+      [owned]
+    );
+  } catch (e) { return 0; }
+  if (!rows || !rows.length) return 0;
+
+  const n = now_stamps();
+  let written = 0;
+  let prev_meter = null;
+  let prev_hi = null;
+  for (const r of rows) {
+    const mid = Number(r.meter_id);
+    if (mid !== prev_meter) { prev_meter = mid; prev_hi = null; }
+    const lo = Number(r.lo);
+    const hi = Number(r.hi);
+    // A rollover or a rebaseline shows up as the odometer going backwards. Fall back to the
+    // within-hour span rather than writing a negative or an absurd hour.
+    const raw = prev_hi !== null && hi >= prev_hi ? hi - prev_hi : hi - lo;
+    prev_hi = hi;
+    const scale = (scale_of && scale_of.get ? scale_of.get(mid) : 0) || 1;
+    const gallons = raw * scale;
+    if (!(gallons > 0)) continue;
+    try {
+      await db.query(
+        'INSERT IGNORE INTO water_hourly (meter_id, hour_key, hour_start_mtn, gallons, reading_count, ' +
+        'updated_at_utc, updated_at_mtn, created_at_mtn, created_at_utc) VALUES (?,?,?,?,?,?,?,?,?)',
+        [mid, r.hour_key, time.hour_start_sql(r.hour_key), gallons, Number(r.n) || 0, n.utc, n.local, n.local, n.utc]
+      );
+      written++;
+    } catch (e) { /* best-effort; a backfill must never stop the collector from starting */ }
+  }
+  return written;
+}
+
 /** Same idea for alert history — 0 keeps everything (a few hundred rows a year). */
 async function prune_alerts(days) {
   const d = Number(days) || 0;
@@ -494,6 +568,7 @@ async function recent_readings(meter_id, limit) {
 module.exports = {
   insert_reading, bump_hour, save_state, get_state, log_raw,
   prune_raw, prune_readings, prune_alerts, prune_hourly, prune_observed, HOURLY_MIN_DAYS, table_sizes,
+  backfill_observed_hourly,
   record_reception, reception_series, prune_reception, daily_series_range,
   record_packets, packet_series, packet_count, meters_heard, prune_packets,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,

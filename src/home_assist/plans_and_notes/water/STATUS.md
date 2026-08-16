@@ -381,8 +381,32 @@ pill, same position, one more capability -- the UI shape did not change.
 - Meters with no data are shown disabled with the reason, rather than offering a choice that
   produces an empty chart. An empty chart is indistinguishable from a broken one.
 
-**Only the Real time tab is wired.** Heartbeat, Long view, History and Alerts still read owned-meter
-data because `ingest.js` still filters to one meter -- that is Step 2 in `MULTI_METER_PLAN.md`.
+### Pass B -- the whole page follows the selection
+
+The half-state is gone. Picking a meter used to change the Real time table while the banner, the
+odometer, the four tiles and the clock above it silently kept describing your own house: one screen
+about two different addresses, with nothing saying so.
+
+| What changed | Why |
+|---|---|
+| **`/api/water/status`, `/meter`, `/hourly`, `/daily`, `/readings`, `/reception`** all take `?meter=` through the same `resolve_meter()` the packets endpoint already used | One resolver, one meaning. No SQL changed -- the queries were always per-meter |
+| **Collector heartbeat is read from the OWNED meter's row regardless of selection** | "Receiver online" is a property of the process, not of the meter you are looking at. Read from a neighbour's row it would report the collector down the moment you selected one -- the most alarming thing this app can say, said wrongly |
+| **Heartbeat chart reads `GREATEST(packets, packets_ours)`** | On a neighbour's row "ours" is zero by definition; the chart would have drawn a flatline, which on this chart means "the radio heard nothing" |
+| **One `MeterPicker` component**, shared by Monitor, History and Diagnostics, in the same place on every tab | It used to live inside the Real time branch, so switching to Heartbeat silently reverted you to your own meter |
+| **`meterSel.js`** -- selection is module state shared across pages, deliberately NOT persisted | Navigating between pages must not change which meter the numbers describe. But reopening the app tomorrow to a banner reading "All clear" about a house that is not yours is the one failure worth designing against |
+| **"All meters" is table-only.** On Heartbeat, Long view and History it falls back to yours and says "showing yours" | Two houses' odometers cannot be summed into one line. Drawing one anyway under an "All meters" pill would be a chart that lies quietly |
+| **Alert history does NOT follow the picker** | Alerts only ever fire for your meter. A filtered list would show empty, which reads as "no alerts" -- the opposite of "not applicable". The card says so when a neighbour is selected |
+| **`backfill_observed_hourly()`** rebuilds observed meters' hourly totals from stored transmissions, on every collector start | Neighbours were captured as packets long before they were rolled up. Selecting one showed an empty history beside a live packet feed. `INSERT IGNORE`, so an hour the live path owns always wins and repeated starts cannot double-count |
+
+**Display follows the picker; ACTION does not.** `ingest_other()` stores a neighbour's readings and
+hourly totals and touches nothing else -- no `rules.`, no `alerts.`, no advance of the owned
+baseline. Pinned by test, because this is the boundary that keeps a neighbour's shower from waking
+you at 3am.
+
+**Still owned-only, on purpose:** leak rules, every alert, the daily summary, and the raw-sample
+card on Diagnostics (raw samples are the undecoded firehose -- filtering them defeats the card).
+
+250 tests pass, 58/58 files parse, SPA builds clean.
 
 ## Open items
 
