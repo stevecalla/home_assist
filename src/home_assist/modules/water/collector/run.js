@@ -154,6 +154,66 @@ async function create_collector(options) {
   let packet_buf = [];
   const last_volume = new Map();
 
+  // ── OTHER METERS ────────────────────────────────────────────────────────────────────────────
+  //
+  // The owned meter's path below is untouched, deliberately. It feeds the leak rules, the alerts
+  // and the watchdog, and none of that should change shape because a neighbour appeared. Other
+  // meters get a PARALLEL path: same ingest guards, same tables, their own baselines -- and no
+  // rules, no alerts, no watchdog, ever.
+  //
+  // Baselines are per meter because `evaluate_reading` compares against the last accepted value.
+  // Sharing one baseline across meters would make every alternating packet look like a wild jump
+  // and the rate filter would reject the lot.
+  const other_last = new Map();
+  // Per-minute reception accumulators, per meter. water_reception's packets_ours column assumed
+  // exactly one meter existed; `packets` is the honest per-row count.
+  const other_rx = new Map();
+  // meter_id -> gallons per tick. A Badger classic counts 1 gallon, a newer endpoint 0.1, so
+  // applying the wrong factor is a silent 10x error that looks entirely plausible on a chart.
+  let scales = new Map();
+
+  function rx_for(id) {
+    let e = other_rx.get(id);
+    if (!e) { e = { packets: 0, rssi_sum: 0, rssi_n: 0, rssi_best: null, snr_sum: 0, snr_n: 0, odometer: null }; other_rx.set(id, e); }
+    return e;
+  }
+
+  /**
+   * The ingest path for a meter that is not ours.
+   *
+   * Everything here is bookkeeping: it never throws its way out, never touches `last`, and never
+   * reaches a rule. If it fails, the owned meter carries on exactly as before.
+   */
+  async function ingest_other(pid, raw_volume, msg2, at) {
+    try {
+      const scale = scales.get(pid) || 1;
+      const gallons = raw_volume * scale;
+      const prev = other_last.get(pid) || null;
+      const verdict = ingest.evaluate_reading(prev, gallons, at, cfg);
+
+      const rx = rx_for(pid);
+      rx.packets += 1;
+      if (typeof msg2.rssi === 'number' && Number.isFinite(msg2.rssi)) {
+        rx.rssi_sum += msg2.rssi; rx.rssi_n += 1;
+        if (rx.rssi_best === null || msg2.rssi > rx.rssi_best) rx.rssi_best = msg2.rssi;
+      }
+      if (typeof msg2.snr === 'number' && Number.isFinite(msg2.snr)) { rx.snr_sum += msg2.snr; rx.snr_n += 1; }
+
+      if (verdict.action === 'impossible') return;    // baseline deliberately not advanced
+      const effects = ingest.reading_effects(verdict);
+      if (effects.insert) await readings.insert_reading(pid, at, gallons, verdict.delta);
+      if (effects.bump_hour) await readings.bump_hour(pid, at, verdict.delta);
+      if (effects.advance) {
+        other_last.set(pid, { gallons: gallons, at: at });
+        rx.odometer = gallons;
+        await readings.save_state(pid, { last_gallons: gallons, last_read_at: at, radio_quiet: false });
+      }
+    } catch (e) {
+      // Never fatal. A neighbour's row failing to write must not disturb the process watching for
+      // a flooded basement.
+    }
+  }
+
   // The run that last raised an alarm, held only in memory. A collector restart loses it, and that
   // is the right trade: the cost is one missed all-clear, and the alternative — a table — would
   // make a purely informational follow-up into schema.
@@ -250,7 +310,13 @@ async function create_collector(options) {
       });
     }
 
-    if (!ours_now) return;   // a neighbour's endpoint — captured above, never counted
+    if (!ours_now) {
+      // Captured above as a packet; now also stored as readings and hourly totals so every view can
+      // show it. Still never counted toward YOUR usage, never a rule, never an alert.
+      const opid = reading.id === null || reading.id === undefined ? cfg.meter_id : reading.id;
+      await ingest_other(opid, reading.raw, msg, new Date());
+      return;
+    }
     pkt_ours++;
     rx_ours++;
 
@@ -307,6 +373,16 @@ async function create_collector(options) {
   async function tick() {
     try {
       cfg = await settings.all();                      // pick up Settings-page edits without a restart
+      // Per-meter gallons scale, refreshed each tick so editing one in the registry takes effect
+      // without a restart. Falls back to the global setting for the owned meter.
+      try {
+        const reg = await meters.list();
+        const next = new Map();
+        reg.forEach(function (m) {
+          next.set(Number(m.meter_id), m.owned ? cfg.gallons_per_unit : (m.gallons_per_unit || 1));
+        });
+        scales = next;
+      } catch (e) { /* keep the previous map */ }
       const now = new Date();
       const hours = await readings.hour_map(meter_id, 72);
 
@@ -362,9 +438,27 @@ async function create_collector(options) {
       // Persist what the radio heard this minute BEFORE anything else in the tick can fail. This
       // is the record you go looking for when the dashboard is empty and you need to know whether
       // the radio was the problem — so it must survive a bad hour, not depend on one.
+      // One row per OTHER meter for this minute, so the heartbeat chart works for any of them.
+      for (const [oid, rx] of other_rx.entries()) {
+        try {
+          await readings.record_reception(oid, now, {
+            packets_total: rx.packets,
+            packets_ours: 0,
+            packets: rx.packets,
+            odometer: rx.odometer,
+            other_ids: null,
+            rssi_avg: rx.rssi_n ? rx.rssi_sum / rx.rssi_n : null,
+            rssi_best: rx.rssi_best,
+            snr_avg: rx.snr_n ? rx.snr_sum / rx.snr_n : null,
+          });
+        } catch (e) { /* bookkeeping */ }
+      }
+      other_rx.clear();
+
       await readings.record_reception(meter_id, now, {
         packets_total: rx_total,
         packets_ours: rx_ours,
+        packets: rx_ours,
         // The meter reading as of this minute — this is what the heartbeat chart draws. Written
         // every minute whether or not it changed, so the line exists continuously rather than only
         // where water happened to move.
@@ -484,6 +578,20 @@ async function create_collector(options) {
   // empty for the first minute of a fresh install -- and "no meters" looks exactly like a dead
   // receiver at the moment someone is most likely to be watching.
   await meters.ensure_owned(meter_id);
+
+  // Observed meters were captured as transmissions long before they were rolled up into hourly
+  // totals, so a neighbour selected in the picker would show an empty history next to a live packet
+  // feed. This rebuilds those hours from the packets still on disk. INSERT IGNORE, so it can never
+  // touch an hour the live path owns and can be run on every start without double-counting.
+  try {
+    const reg = await meters.list();
+    const scale_map = new Map();
+    reg.forEach(function (m) {
+      scale_map.set(Number(m.meter_id), m.owned ? cfg.gallons_per_unit : (m.gallons_per_unit || 1));
+    });
+    const filled = await readings.backfill_observed_hourly(meter_id, scale_map);
+    if (filled) console.log('[water] backfilled ' + filled + ' observed hour(s) from stored transmissions');
+  } catch (e) { /* best-effort; a backfill must never stop the collector from starting */ }
 
   const timer = setInterval(function () { tick(); }, TICK_MS);
   const packet_timer = setInterval(function () { flush_packets(); }, PACKET_FLUSH_MS);

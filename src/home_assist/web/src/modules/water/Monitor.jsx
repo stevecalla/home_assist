@@ -8,6 +8,8 @@ import DataGrid from '../../components/DataGrid.jsx';
 import CollapsibleCard from '../../components/CollapsibleCard.jsx';
 import CardTools from '../../components/CardTools.jsx';
 import SqlPanel from './SqlPanel.jsx';
+import MeterPicker from './MeterPicker.jsx';
+import { useMeterSel } from './meterSel.js';
 import './water.css';
 
 // The Monitor — the page you open when you wonder "is water running right now?"
@@ -115,26 +117,11 @@ export default function Monitor() {
   const [rtRowLimit, setRtRowLimit] = useState(RT_ROWS_DEFAULT);
   // 'mine' | 'all' | a meter id as a string. The API resolves all three to the same
   // (meter_id, scope) pair the queries already took, so this stayed a one-line change.
-  const [rtScope, setRtScope] = useState('mine');
-  const [meterList, setMeterList] = useState(null);
-  const [pickOpen, setPickOpen] = useState(false);
+  //
+  // Shared with History and Diagnostics via meterSel — one selection for the whole panel, so
+  // navigating between pages cannot silently change which meter the numbers describe.
+  const [sel, setSel] = useMeterSel();
 
-  // The pill shows the chosen meter's name, not a raw id, once one has a label.
-  function meterLabel(id) {
-    const m = (meterList || []).find((x) => String(x.meter_id) === String(id));
-    return (m && m.label) || id;
-  }
-
-  // The selector's options come from water_meters, not from the packets just fetched. Packets are
-  // pruned within a day, so a list derived from them loses any meter that went quiet overnight --
-  // options that come and go read as a bug in the app rather than as reception.
-  useEffect(() => {
-    let live = true;
-    api.waterMeters().then((r) => {
-      if (live && r.status === 200 && r.body.ok) setMeterList(r.body.meters);
-    });
-    return () => { live = false; };
-  }, []);
   const [tail, setTail] = useState([]);
   // A 1-second tick, used only to age the "last packet" counter. The data poll stays at 5s — this
   // is about the DISPLAY being visibly alive, not about asking the server more often.
@@ -189,7 +176,7 @@ export default function Monitor() {
   const TAIL_MS = 15 * 60 * 1000;
 
   const loadStatus = useCallback(async () => {
-    const s = await api.waterStatus();
+    const s = await api.waterStatus(sel);
     if (s.status === 200 && s.body.ok) {
       setStatus(s.body);
       setErr('');
@@ -212,27 +199,34 @@ export default function Monitor() {
         }
       }
     } else setErr(s.body.error || 'Could not load status');
-  }, []);
+    // `sel` is a dependency: the banner, the run meter and the four tiles all come from this call,
+    // so switching meters has to re-fetch it or the page would describe two houses at once.
+  }, [sel]);
 
   const loadRealtime = useCallback(async () => {
     if (mode !== 'realtime') return;
-    const r = await api.waterPackets({ hours: (rtMin / 60).toFixed(4), meter: rtScope, limit: rtRowLimit });
+    const r = await api.waterPackets({ hours: (rtMin / 60).toFixed(4), meter: sel, limit: rtRowLimit });
     if (r.status === 200 && r.body.ok) setRt(r.body);
-  }, [mode, rtMin, rtScope, rtRowLimit]);
+  }, [mode, rtMin, sel, rtRowLimit]);
 
   const loadSeries = useCallback(async () => {
     if (mode === 'realtime') return;
-    const q = mode === 'long' ? { mode: 'long', days } : { mode: 'heartbeat', hours };
+    const q = mode === 'long'
+      ? { mode: 'long', days, meter: sel }
+      : { mode: 'heartbeat', hours, meter: sel };
     const m = await api.waterMeter(q);
     if (m.status === 200 && m.body.ok) setMeter(m.body);
-  }, [mode, hours, days]);
+  }, [mode, hours, days, sel]);
 
   const loadSlow = useCallback(async () => {
-    const h = await api.waterHourly(48);
+    const h = await api.waterHourly(48, sel);
     if (h.status === 200 && h.body.ok) setHourly(h.body);
+    // Alerts are NOT filtered by the picker: they only ever fire for your own meter, and a history
+    // that emptied itself when you looked at a neighbour would read as "no alerts", not "not
+    // applicable". The card is labelled accordingly.
     const a = await api.waterAlerts(5);
     if (a.status === 200 && a.body.ok) setAlerts(a.body.alerts);
-  }, []);
+  }, [sel]);
 
   useEffect(() => {
     loadStatus();
@@ -246,6 +240,11 @@ export default function Monitor() {
     const id = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // The live tail is a series of odometer readings from ONE meter. Carrying it across a selection
+  // change would splice two houses' odometers into a single line — a cliff up or down that looks
+  // like a rollover. Drop it and let it refill from the new meter's polls.
+  useEffect(() => { setTail([]); lastHeardRef.current = null; }, [sel]);
 
   useEffect(() => {
     loadSeries();
@@ -309,7 +308,19 @@ export default function Monitor() {
   // ── the Real time tab ──────────────────────────────────────────────────────────────────────
   const rtCols = rt && rt.columns ? rt.columns : [];
   const rtPackets = rt ? rt.packets : [];
-  const rtMine = rtPackets.filter((p) => p.is_ours);
+  // WHICH METER THIS CARD IS DESCRIBING.
+  //
+  // Everything below follows the picker rather than always meaning "ours". The half-state was the
+  // confusing part: pick a neighbour and the table changed while the odometer, the packet count,
+  // the signal badge and the clock all silently kept showing your meter -- one row of numbers about
+  // two different houses, with nothing saying so.
+  //
+  // On "all meters" the stats still describe YOUR meter, because mixing several endpoints' arrival
+  // times into one interval or one SNR average describes no real transmitter.
+  const selId = /^[0-9]+$/.test(sel) ? Number(sel) : null;
+  const rtFocus = selId !== null ? rtPackets : rtPackets.filter((p) => p.is_ours);
+  // packet_series returns oldest-first, so the newest row is the last one.
+  const rtNewest = rtFocus.length ? rtFocus[rtFocus.length - 1] : null;
   // The key is (meter_id, heard_at_utc) — the table's PRIMARY KEY, and stable for the life of the
   // row. It briefly included the array index, which was wrong in a way that only shows up live:
   // rows are newest-first, so ONE arrival at the top shifted every index below it and therefore
@@ -333,10 +344,29 @@ export default function Monitor() {
   const rtCounts = rt && rt.counts ? rt.counts : null;
   const rtCoverage = rt && rt.coverage ? rt.coverage : null;
   const rtLastSnr = (() => {
-    const withSnr = rtMine.filter((p) => p.snr !== null && p.snr !== undefined).slice(-20);
+    const withSnr = rtFocus.filter((p) => p.snr !== null && p.snr !== undefined).slice(-20);
     return withSnr.length ? withSnr.reduce((a, p) => a + p.snr, 0) / withSnr.length : null;
   })();
   const rtSnrBand = band_of(rt && rt.quality, 'snr', rtLastSnr);
+
+  // A neighbour's odometer is not in water_collector_state -- that table only tracks ours -- but it
+  // is right there in their packets. Same for "when did this meter last transmit".
+  const focusOdo = selId !== null
+    ? (rtNewest ? rtNewest.volume : null)
+    : liveOdo;
+  const focusLastAt = selId !== null
+    ? (rtNewest ? rtNewest.heard_at_utc : null)
+    : r.last_read_at;
+  const focusSecs = focusLastAt
+    ? Math.max(0, Math.round((tick - new Date(focusLastAt).getTime()) / 1000))
+    : null;
+  // Heartbeat and Long view get their numbers from /api/water/meter and /api/water/status, both of
+  // which now take the same `meter` parameter — so those two already describe the selected meter and
+  // need no client-side substitution. Real time is the exception: its numbers come from packets.
+  const cardOdo = mode === 'realtime' ? focusOdo : liveOdo;
+  const cardSecs = mode === 'realtime' ? focusSecs : secsSince;
+  const cardLastAt = mode === 'realtime' ? focusLastAt : r.last_read_at;
+  const cardTitle = selId !== null ? selId + ' — live' : 'Meter — live';
 
   const exportHeaders = mode === 'long' ? lvHeaders : mode === 'realtime' ? rtHeaders : hbHeaders;
   const exportRows = mode === 'long' ? lvRows : mode === 'realtime' ? rtRows : hbRows;
@@ -351,7 +381,11 @@ export default function Monitor() {
       <div className="w-page-head">
         <div>
           <h2>Water monitor</h2>
-          <p className="muted">{status.meter_name ? status.meter_name + ' · ' : ''}ID {status.meter_id} · {status.tz}</p>
+          <p className="muted">
+            {status.meter_name ? status.meter_name + ' · ' : ''}ID {status.own_meter_id || status.meter_id} · {status.tz}
+            {selId !== null
+              ? <b className="w-viewing"> · viewing {selId}</b> : null}
+          </p>
           {/* What is actually on the air, read from the collector's own resolved rtl_433 arguments.
               "No readings" has two very different causes and one of them is being tuned to the
               wrong frequency or running a build without the Orion decoder — so the transmitter and
@@ -430,7 +464,7 @@ export default function Monitor() {
           nobody used water; a flat reading with a flatline means you are not being read at all, and
           those two look identical on a single-line chart. */}
       <CollapsibleCard
-        title="Meter — live"
+        title={cardTitle}
         defaultOpen
         forceOpen={force.open}
         forceKey={force.key}
@@ -456,6 +490,22 @@ export default function Monitor() {
       >
         <div className="w-rangebar">
           <span className="w-range-label">{status.tz.split('/')[1].replace('_', ' ')} time</span>
+          {/* ONE picker for the whole page, in the same place on every tab. It used to live inside
+              the Real time branch, which meant switching to Heartbeat silently reverted you to your
+              own meter without saying so. Selection is shared state, so the banner, the tiles, this
+              card and the hourly chart all describe the same meter at all times.
+
+              A display filter only: what gets CAPTURED is packets_capture_all_meters in Settings.
+
+              The markup is MeterPicker, shared with History and Diagnostics. */}
+          <MeterPicker sel={sel} setSel={setSel} ownId={status.own_meter_id} />
+          {/* "All meters" is a table filter — it only means something where rows from several
+              endpoints can sit side by side. A usage chart cannot add two houses' odometers
+              together, so outside Real time the selection falls back to yours and says so rather
+              than drawing an unexplained single line under an "All meters" pill. */}
+          {mode !== 'realtime' && sel === 'all'
+            ? <span className="w-range-label" title="Usage totals are per meter — two houses cannot be summed into one odometer. Pick a single meter to see its history.">showing yours</span>
+            : null}
           {mode === 'realtime' ? (
             <>
               {RT_CHIPS.filter((c) => !rt || c.m <= rt.max_hours * 60).map((c) => (
@@ -474,58 +524,6 @@ export default function Monitor() {
                   {n >= 10000 ? 'max' : n.toLocaleString()}
                 </button>
               ))}
-              {/* A display filter. What gets CAPTURED is packets_capture_all_meters in Settings —
-                  flipping this never changes what is stored. */}
-              {/* The original two pills, unchanged — with the second one split so it can also be a
-                  specific meter. Left half sets the scope, the caret opens the list.
-
-                  The menu lives in a WRAPPER, not inside .w-filt. That pill has overflow:hidden to
-                  clip its own rounded corners, which silently clipped the dropdown out of existence
-                  — it rendered, it was just invisible. Anything absolutely positioned below a pill
-                  has to escape that box. */}
-              <span className="w-pickwrap">
-              <span className="w-filt">
-                <button type="button"
-                        className={rtScope === 'mine' ? 'on' : ''}
-                        onClick={() => { setRtScope('mine'); setPickOpen(false); }}>
-                  This meter
-                </button>
-                <button type="button"
-                        className={rtScope !== 'mine' ? 'on' : ''}
-                        onClick={() => { setRtScope('all'); setPickOpen(false); }}
-                        title="Every meter the radio hears, mixed into one table">
-                  {rtScope === 'mine' || rtScope === 'all' ? 'All meters' : meterLabel(rtScope)}
-                </button>
-                <button type="button"
-                        className={'w-caret' + (pickOpen ? ' on' : '')}
-                        aria-label="Pick a meter"
-                        title="Pick one meter"
-                        onClick={() => setPickOpen((v) => !v)}>▾</button>
-              </span>
-                {pickOpen ? (
-                  <span className="w-pick-menu" onMouseLeave={() => setPickOpen(false)}>
-                    <button type="button"
-                            className={rtScope === 'all' ? 'on' : ''}
-                            onClick={() => { setRtScope('all'); setPickOpen(false); }}>
-                      All meters
-                    </button>
-                    {(meterList || []).map((m) => (
-                      <button key={m.meter_id} type="button"
-                              className={rtScope === String(m.meter_id) ? 'on' : ''}
-                              disabled={!m.has_packets}
-                              onClick={() => { setRtScope(String(m.meter_id)); setPickOpen(false); }}>
-                        {m.label || m.meter_id}
-                        {m.owned ? <i className="w-mine">mine</i> : null}
-                        {m.has_packets ? null : <i className="w-nodata">no data</i>}
-                      </button>
-                    ))}
-                    {meterList && meterList.length === 0
-                      ? <span className="w-pick-empty">No meters heard yet</span> : null}
-                    {meterList === null
-                      ? <span className="w-pick-empty">Loading…</span> : null}
-                  </span>
-                ) : null}
-              </span>
               {/* Two different facts, so two tooltips. "Keeping" is a disk retention setting;
                   "in this window" is how many rows this view loaded. They sat next to each other
                   with no way to tell which was which, and neither said where to go to change it. */}
@@ -576,9 +574,10 @@ export default function Monitor() {
               ticks. A constant idle pulse would be decoration; a pulse tied to an actual arrival
               is information, and its absence is information too. */}
           <span key={beat} className={'w-livetip ' + (run.flowing ? 'flowing' : 'idle') +
-            (secsSince !== null && secsSince > 120 ? ' stalled' : '')}>
+            (cardSecs !== null && cardSecs > 120 ? ' stalled' : '')}
+            title={selId !== null ? 'Newest transmission from ' + selId : 'Newest transmission from your meter'}>
             <i aria-hidden="true" />
-            {r.last_read_at ? clockOnly(r.last_read_at, status.tz) : 'no packet yet'}
+            {cardLastAt ? clockOnly(cardLastAt, status.tz) : 'no packet yet'}
           </span>
         </div>
 
@@ -604,7 +603,7 @@ export default function Monitor() {
         <div className="w-readout">
           <div>
             <div className="w-readout-big">
-              {liveOdo === null || liveOdo === undefined ? '—' : Number(liveOdo).toLocaleString()}
+              {cardOdo === null || cardOdo === undefined ? '—' : Number(cardOdo).toLocaleString()}
               <span> gal</span>
             </div>
             <div className="w-readout-lab" title={METRIC_HELP.reading}>meter reading now <i className="w-q">?</i></div>
@@ -612,13 +611,13 @@ export default function Monitor() {
           {mode === 'realtime' ? (
             <>
               <div>
-                <div className={'w-readout-sm w-since ' + sinceClass(secsSince)} key={beat}>
-                  {secsSince === null ? '—' : secsSince + 's'}
+                <div className={'w-readout-sm w-since ' + sinceClass(cardSecs)} key={beat}>
+                  {cardSecs === null ? '—' : cardSecs + 's'}
                 </div>
                 <div className="w-readout-lab" title={METRIC_HELP.since}>since last packet <i className="w-q">?</i></div>
               </div>
               <div>
-                <div className="w-readout-sm">{rtMine.length.toLocaleString()}</div>
+                <div className="w-readout-sm">{rtFocus.length.toLocaleString()}</div>
                 <div className="w-readout-lab" title={METRIC_HELP.shown}>transmissions shown <i className="w-q">?</i></div>
               </div>
               <div>
@@ -733,7 +732,7 @@ export default function Monitor() {
             <>
               <div ref={rtRef}>
                 <RealtimeChart
-                  packets={rtMine}
+                  packets={rtFocus}
                   gaps={rt ? rt.gaps : []}
                   secondsSince={secsSince}
                   tz={status.tz}
@@ -868,7 +867,7 @@ export default function Monitor() {
       </CollapsibleCard>
 
       <CollapsibleCard
-        title="Gallons per hour, last 48 hours"
+        title={selId !== null ? 'Gallons per hour, last 48 hours — ' + selId : 'Gallons per hour, last 48 hours'}
         defaultOpen={false}
         forceOpen={force.open}
         forceKey={force.key}
@@ -922,9 +921,14 @@ export default function Monitor() {
       </CollapsibleCard>
 
       {/* Recent alerts, with delivery status. An alert that was raised but never delivered is the
-          failure this panel exists to make impossible to miss. */}
+          failure this panel exists to make impossible to miss.
+
+          This card deliberately does NOT follow the meter picker: alerts are only ever raised for
+          your own meter, so filtering it would show an empty list that reads as "no alerts" when
+          the truth is "not applicable". The sub-line says so when a neighbour is selected. */}
       <CollapsibleCard
         title="Recent alerts"
+        sub={selId !== null ? 'Alerts are raised for your meter only — this list does not follow the meter selector.' : undefined}
         defaultOpen={false}
         forceOpen={force.open}
         forceKey={force.key}

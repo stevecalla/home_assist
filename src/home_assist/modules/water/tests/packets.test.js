@@ -325,8 +325,35 @@ test('neighbouring meters are captured before the filter and counted after it', 
   // starts advancing your odometer and firing your alerts.
   const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
   const capture = run.indexOf('packet_buf.push(');
-  const gate = run.indexOf('if (!ours_now) return;');
+  const gate = run.indexOf('if (!ours_now) {');
   assert.ok(capture !== -1 && gate !== -1, 'both the capture and the gate must exist');
   assert.ok(capture < gate, 'capture must happen BEFORE the our-meter gate, or neighbours are lost');
   assert.ok(run.indexOf('pkt_ours++') > gate, 'counting must happen AFTER the gate');
+});
+
+test('other meters get their own ingest path, and it can never reach a rule', function () {
+  // Other meters are now stored as readings and hourly totals too, so every view can show them.
+  // The boundary that must not move: they are a PARALLEL path. They never touch the owned meter's
+  // baseline, never enter leak_rules, and never dispatch an alert. Emailing about a neighbour's
+  // leak is a decision with a doorstep conversation attached; it must not arrive by accident.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  const start = run.indexOf('async function ingest_other(');
+  assert.ok(start !== -1, 'the parallel path must exist');
+  const body = run.slice(start, run.indexOf('\n  }', run.indexOf('} catch (e) {', start)));
+
+  assert.ok(body.indexOf('rules.') === -1, 'no leak rule may run for a meter that is not ours');
+  assert.ok(body.indexOf('alerts.') === -1, 'no alert may ever be dispatched for another meter');
+  assert.ok(!/\blast\s*=/.test(body), 'it must not touch the owned meter baseline');
+  assert.match(body, /other_last/, 'other meters keep their OWN baseline');
+  assert.match(body, /catch \(e\)/, 'it is bookkeeping and must never break the collector');
+});
+
+test('each meter is scaled by its own gallons-per-unit', function () {
+  // A Badger classic counts 1 gallon per tick; a newer endpoint counts 0.1. Applying one meter's
+  // factor to another is a silent 10x error that looks entirely plausible on a chart -- and would
+  // read as a catastrophic leak or as nothing at all depending which way round it went.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  assert.match(run, /scales\.get\(pid\)/, 'the scale must be looked up per meter');
+  assert.match(run, /m\.owned \? cfg\.gallons_per_unit/,
+    'the owned meter keeps the global setting so existing behaviour is unchanged');
 });

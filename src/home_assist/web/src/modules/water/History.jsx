@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import BarChart from './BarChart.jsx';
+import MeterPicker from './MeterPicker.jsx';
+import { useMeterSel } from './meterSel.js';
 import './water.css';
 
 // History — the longer view. Hourly over a chosen window, plus daily totals.
@@ -17,14 +19,18 @@ export default function History() {
   const [hourly, setHourly] = useState(null);
   const [daily, setDaily] = useState(null);
   const [table, setTable] = useState(false);
+  // The same selection the Monitor is using. Charting is per meter -- 'all' resolves to yours
+  // server-side, because two houses' odometers cannot be summed into one line.
+  const [sel, setSel] = useMeterSel();
+  const selId = /^[0-9]+$/.test(sel) ? Number(sel) : null;
 
   useEffect(() => {
-    api.waterHourly(hours).then((r) => { if (r.status === 200 && r.body.ok) setHourly(r.body); });
-  }, [hours]);
+    api.waterHourly(hours, sel).then((r) => { if (r.status === 200 && r.body.ok) setHourly(r.body); });
+  }, [hours, sel]);
 
   useEffect(() => {
-    api.waterDaily(days).then((r) => { if (r.status === 200 && r.body.ok) setDaily(r.body); });
-  }, [days]);
+    api.waterDaily(days, sel).then((r) => { if (r.status === 200 && r.body.ok) setDaily(r.body); });
+  }, [days, sel]);
 
   const win = hourly ? hourly.overnight_window : [2, 5];
 
@@ -47,7 +53,14 @@ export default function History() {
   return (
     <div className="page w-root">
       <h2>Water history</h2>
-      <p className="muted">Everything the collector has recorded, in local time.</p>
+      <p className="muted">
+        Everything the collector has recorded, in local time.
+        {selId !== null ? <b className="w-viewing"> · viewing {selId}</b> : null}
+      </p>
+      <div className="w-rangebar">
+        <span className="w-range-label">Meter</span>
+        <MeterPicker sel={sel} setSel={setSel} ownId={hourly ? hourly.own_meter_id : null} allowAll={false} />
+      </div>
 
       <div className="w-chart-card">
         <div className="w-chart-head">

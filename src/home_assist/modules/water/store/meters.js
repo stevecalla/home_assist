@@ -117,10 +117,13 @@ async function ensure_owned(meter_id) {
   const n = time.stamps(new Date());
   try {
     await db.query(
+      // No auto-label. "My meter" beside a "mine" badge said the same thing twice and pushed the
+      // id -- the thing you actually search the table by -- out of view. A label is for a name a
+      // human chose, not for a synonym of a flag.
       'INSERT INTO water_meters (meter_id, owned, collect_readings, label, created_at_mtn) ' +
       'VALUES (?,1,1,?,?) ' +
-      'ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1',
-      [id, 'My meter', n.local]
+      'ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1, label = NULL',
+      [id, null, n.local]
     );
   } catch (e) { /* best-effort */ }
 }

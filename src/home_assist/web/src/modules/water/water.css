@@ -700,6 +700,8 @@
   letter-spacing: .04em;
 }
 .w-pick-empty { padding: 8px 10px; font-size: 12px; opacity: .7; }
+/* When the card is showing someone else's meter, say so where the page identifies itself. */
+.w-viewing { color: var(--w-good); }
 .w-mem {
   font-size: 11px; color: var(--muted); background: var(--bg);
   border: 1px solid var(--line); border-radius: 7px; padding: 2px 9px;
