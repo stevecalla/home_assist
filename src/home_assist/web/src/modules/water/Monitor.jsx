@@ -477,9 +477,13 @@ export default function Monitor() {
               {/* A display filter. What gets CAPTURED is packets_capture_all_meters in Settings —
                   flipping this never changes what is stored. */}
               {/* The original two pills, unchanged — with the second one split so it can also be a
-                  specific meter. Left half sets the scope, the caret opens the list. A plain
-                  <select> replaced both pills and lost the at-a-glance "which of the two am I on",
-                  which was the point of a two-state control in the first place. */}
+                  specific meter. Left half sets the scope, the caret opens the list.
+
+                  The menu lives in a WRAPPER, not inside .w-filt. That pill has overflow:hidden to
+                  clip its own rounded corners, which silently clipped the dropdown out of existence
+                  — it rendered, it was just invisible. Anything absolutely positioned below a pill
+                  has to escape that box. */}
+              <span className="w-pickwrap">
               <span className="w-filt">
                 <button type="button"
                         className={rtScope === 'mine' ? 'on' : ''}
@@ -497,6 +501,7 @@ export default function Monitor() {
                         aria-label="Pick a meter"
                         title="Pick one meter"
                         onClick={() => setPickOpen((v) => !v)}>▾</button>
+              </span>
                 {pickOpen ? (
                   <span className="w-pick-menu" onMouseLeave={() => setPickOpen(false)}>
                     <button type="button"
@@ -516,6 +521,8 @@ export default function Monitor() {
                     ))}
                     {meterList && meterList.length === 0
                       ? <span className="w-pick-empty">No meters heard yet</span> : null}
+                    {meterList === null
+                      ? <span className="w-pick-empty">Loading…</span> : null}
                   </span>
                 ) : null}
               </span>

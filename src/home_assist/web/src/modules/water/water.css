@@ -668,7 +668,7 @@
 
 /* The meter picker keeps the original two pills and adds a caret to the second one. Same shell,
    same size — the only new thing is a small list that drops out of it. */
-.w-filt { position: relative; }
+.w-pickwrap { position: relative; display: inline-flex; }
 .w-filt button.w-caret { padding: 4px 8px; font-size: 10px; line-height: 1; }
 .w-pick-menu {
   position: absolute;
