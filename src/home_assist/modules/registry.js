@@ -46,14 +46,22 @@ function mount_all(app) {
   MODULES.forEach(function (m) { if (!m.externalApi && typeof m.mount === 'function') m.mount(app); });
 }
 
-// Prebuild each module's caches at server startup (best-effort, non-blocking). Called from
-// start_server AFTER listen — NEVER from create_app, so tests that build the app don't hit MySQL.
-function warm_all() {
-  MODULES.forEach(function (m) {
-    if (typeof m.warm === 'function') {
-      try { Promise.resolve(m.warm()).catch(function () {}); } catch (e) { /* ignore */ }
-    }
-  });
+// Prebuild each module's caches and seed anything the UI needs before its collector has ever run.
+// Called from start_server AFTER listen and AFTER ensure_schema — NEVER from create_app, so tests
+// that build the app don't hit MySQL.
+//
+// Awaited now (it used to be fire-and-forget) so the boot sequence is ordered: schema, then seed,
+// then the first request. A seed racing its own CREATE TABLE fails silently and leaves an empty
+// dropdown, which reads as a broken app rather than an unfinished startup.
+//
+// Still best-effort per module: one module's warm failing must not stop the next, and must never
+// stop the server serving.
+async function warm_all() {
+  for (const m of MODULES) {
+    if (typeof m.warm !== 'function') continue;
+    try { await m.warm(); }
+    catch (e) { console.warn('[warm] ' + m.id + ': ' + e.message); }
+  }
 }
 
 module.exports = { list, panels, mount_all, warm_all };

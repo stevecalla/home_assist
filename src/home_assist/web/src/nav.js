@@ -11,6 +11,7 @@ const WaterMonitor = lazy(() => import('./modules/water/Monitor.jsx'));
 const WaterHistory = lazy(() => import('./modules/water/History.jsx'));
 const WaterAlerts = lazy(() => import('./modules/water/Alerts.jsx'));
 const WaterSettings = lazy(() => import('./modules/water/Settings.jsx'));
+const WaterMeters = lazy(() => import('./modules/water/Meters.jsx'));
 const WaterDiagnostics = lazy(() => import('./modules/water/Diagnostics.jsx'));
 const WaterReference = lazy(() => import('./modules/water/Reference.jsx'));
 
@@ -21,6 +22,7 @@ export const NAV = [
       { label: 'History', path: '/water/history', panel: 'water', icon: '📈', Component: WaterHistory },
       { label: 'Alerts', path: '/water/alerts', panel: 'water', icon: '🔔', Component: WaterAlerts },
       { label: 'Settings', path: '/water/settings', panel: 'water-admin', icon: '⚙', Component: WaterSettings },
+      { label: 'Meters', path: '/water/meters', panel: 'water-admin', icon: '🏠', Component: WaterMeters },
       { label: 'Diagnostics', path: '/water/diagnostics', panel: 'water-admin', icon: '📡', Component: WaterDiagnostics },
       { label: 'Reference', path: '/water/reference', panel: 'water', icon: '📖', Component: WaterReference },
     ],

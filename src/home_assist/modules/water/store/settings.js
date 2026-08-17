@@ -197,7 +197,10 @@ const DEFS = {
   alert_email_to: {
     type: 'string', def: '', env: 'EMAIL_RECIPIENT', group: 'Alerts — email',
     label: 'Send alerts to',
-    help: 'Leave blank to use EMAIL_RECIPIENT (falling back to EMAIL_SENDER) from .env. Comma-separate for several.',
+    help: 'One or more addresses, comma-separated. This is the DEFAULT list — a meter with its own '
+      + 'address on the Meters page overrides it. Blank falls back to EMAIL_RECIPIENT (then '
+      + 'EMAIL_SENDER) from .env. Each address is validated on save; a rejected recipient is '
+      + 'recorded per alert rather than hidden behind a single "delivered".',
   },
 
   alert_ntfy_enabled: {

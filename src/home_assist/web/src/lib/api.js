@@ -68,4 +68,6 @@ export const api = {
   waterMeter: (q) => jget('/api/water/meter?' + new URLSearchParams(q).toString()),
   waterPackets: (q) => jget('/api/water/packets?' + new URLSearchParams(q).toString()),
   waterMeters: () => jget('/api/water/meters'),
+  waterSaveMeter: (id, patch) => jpost('/api/water/meters/' + encodeURIComponent(id), patch),
+  waterTestMeterEmail: (id) => jpost('/api/water/meters/' + encodeURIComponent(id) + '/test', {}),
 };

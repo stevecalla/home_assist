@@ -17,6 +17,7 @@
  */
 const db = require('../../../store/db');
 const time = require('../../../time');
+const mailer = require('../../../notify/mailer');
 
 /**
  * Record that these meters were heard, in one statement.
@@ -81,7 +82,8 @@ async function record_heard(seen, owned_meter_id) {
  */
 async function list() {
   const rows = await db.query(
-    'SELECT m.meter_id, m.label, m.model, m.owned, m.collect_readings, m.gallons_per_unit, m.notify, ' +
+    'SELECT m.meter_id, m.label, m.model, m.owned, m.collect_readings, m.gallons_per_unit, ' +
+    '       m.notify, m.notify_email, ' +
     '       m.first_heard_utc, m.first_heard_mtn, m.last_heard_utc, m.last_heard_mtn, m.packets_seen, ' +
     '       EXISTS(SELECT 1 FROM water_packets p WHERE p.meter_id = m.meter_id) AS has_packets, ' +
     '       EXISTS(SELECT 1 FROM water_hourly  h WHERE h.meter_id = m.meter_id) AS has_readings ' +
@@ -98,6 +100,7 @@ async function list() {
       // Whether this meter's alerts are DELIVERED. Detection is unconditional; delivery is
       // opt-in and off for neighbours, so a stranger's shower can never wake you at 3am.
       notify: !!r.notify,
+      notify_email: r.notify_email || '',
       gallons_per_unit: Number(r.gallons_per_unit),
       first_heard_mtn: r.first_heard_mtn || null,
       last_heard_mtn: r.last_heard_mtn || null,
@@ -134,4 +137,58 @@ async function ensure_owned(meter_id) {
   } catch (e) { /* best-effort */ }
 }
 
-module.exports = { record_heard, list, ensure_owned };
+/**
+ * Edit the operator-owned fields of one meter. Everything else in water_meters is written by the
+ * collector from what it heard and is not editable -- first_heard is a fact, not a preference.
+ *
+ * Returns { ok, error }. The two rules enforced here rather than in the UI, because the UI is not
+ * the only way in and a rule that lives only in a form is a rule that can be walked around:
+ *
+ *  1. An address list must parse. A typo'd recipient is an alert that silently never arrives,
+ *     which is worse than no alert at all -- you believe you are covered.
+ *  2. notify may not be turned on for a meter that is not yours without an explicit address.
+ *     Otherwise it falls through to the global list and a neighbour's overnight flow starts
+ *     emailing YOU at 3am, which nobody asked for and nobody would guess was configured.
+ */
+async function update(meter_id, patch, owned_meter_id) {
+  const id = Number(meter_id) || 0;
+  if (!id) return { ok: false, error: 'bad meter id' };
+  const is_owned = Number(owned_meter_id) === id;
+
+  const label = patch.label === undefined || patch.label === null
+    ? null : String(patch.label).trim().slice(0, 120) || null;
+
+  const emails = mailer.parse_recipients(patch.notify_email);
+  const bad = emails.filter(function (a) { return !mailer.valid_address(a); });
+  if (bad.length) return { ok: false, error: 'not an email address: ' + bad.join(', ') };
+  const notify_email = emails.length ? emails.join(', ').slice(0, 500) : null;
+
+  const notify = patch.notify ? 1 : 0;
+  if (notify && !is_owned && !notify_email) {
+    return { ok: false, error: 'give this meter its own address before turning delivery on — '
+      + 'without one its alerts would fall through to your own inbox' };
+  }
+
+  let scale = Number(patch.gallons_per_unit);
+  if (!Number.isFinite(scale) || scale <= 0) scale = 1;
+
+  try {
+    await db.query(
+      'UPDATE water_meters SET label = ?, notify = ?, notify_email = ?, gallons_per_unit = ? ' +
+      'WHERE meter_id = ?',
+      [label, notify, notify_email, scale, id]
+    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** Where one meter's alerts go. Its own list if it has one, otherwise the global setting. */
+function recipients_for(meter, global_to) {
+  const own = meter && meter.notify_email ? mailer.parse_recipients(meter.notify_email) : [];
+  if (own.length) return own.join(', ');
+  return global_to || '';
+}
+
+module.exports = { record_heard, list, ensure_owned, update, recipients_for };

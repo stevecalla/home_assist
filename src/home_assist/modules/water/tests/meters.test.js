@@ -316,3 +316,113 @@ test('the "also hearing" line collapses per-minute rows into one entry per meter
   assert.ok(ui.indexOf('new Set(series.map((m) => m.other_ids)') === -1,
     'the raw distinct-set version is the bug');
 });
+
+test('a recipient list is parsed, deduped, and never silently dropped', function () {
+  const mailer = require('../../../notify/mailer');
+  assert.deepEqual(mailer.parse_recipients('a@x.com, b@y.com'), ['a@x.com', 'b@y.com']);
+  // People paste all of these. Rejecting a list because of a semicolon would be a support call.
+  assert.deepEqual(mailer.parse_recipients('a@x.com;b@y.com\n c@z.com'), ['a@x.com', 'b@y.com', 'c@z.com']);
+  // The same address twice sends the same alert twice, and the second copy teaches you to skim
+  // the first.
+  assert.deepEqual(mailer.parse_recipients('a@x.com, A@X.COM'), ['a@x.com']);
+  assert.deepEqual(mailer.parse_recipients(''), []);
+  assert.deepEqual(mailer.parse_recipients(null), []);
+
+  assert.ok(mailer.valid_address('steve@example.com'));
+  assert.ok(mailer.valid_address('a.b+tag@sub.example.co.uk'));
+  assert.ok(!mailer.valid_address('steve@example'), 'no dot in the domain is the common typo');
+  assert.ok(!mailer.valid_address('not an address'));
+});
+
+test('one bad address does not silence the whole list', function () {
+  // The failure this prevents: a typo in the fourth recipient rejecting the message for the other
+  // three, so a leak alert reaches nobody because of a spelling mistake.
+  const src = fs.readFileSync(require.resolve('../../../notify/mailer'), 'utf8');
+  const i = src.indexOf('async function send(mail)');
+  const body = src.slice(i, src.indexOf('\n}', i));
+  assert.match(body, /const good = list\.filter\(valid_address\)/);
+  assert.match(body, /to: good,/, 'the valid addresses must still be sent to');
+  assert.match(body, /rejected: rejected/, 'and the bad ones reported, not dropped');
+});
+
+test('a delivered alert names who actually accepted it', function () {
+  // "delivered = 1" with three good addresses and one typo used to be indistinguishable from
+  // "delivered = 1" with four good ones. The typo stayed invisible until someone mentioned they
+  // never get the alerts.
+  const src = fs.readFileSync(require.resolve('../store/alerts'), 'utf8');
+  assert.match(src, /email:partial — rejected/);
+});
+
+test('a neighbour cannot be switched to notify without its own address', function () {
+  // Otherwise `notify` on an observed meter falls through to the global list and a stranger's
+  // overnight flow starts emailing YOU at 3am -- configured by one checkbox, guessable by nobody.
+  const src = fs.readFileSync(require.resolve('../store/meters'), 'utf8');
+  const i = src.indexOf('async function update');
+  assert.ok(i !== -1, 'meters.update must exist');
+  const body = src.slice(i, src.indexOf('\n}', i));
+  assert.match(body, /if \(notify && !is_owned && !notify_email\)/);
+  assert.match(body, /return \{ ok: false/, 'and it must refuse, not warn');
+  // Validation lives in the store, not the form: the form is not the only way in.
+  assert.match(body, /not an email address/);
+});
+
+test('editing a meter is water-admin; choosing one is not', function () {
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const get = api.indexOf("app.get('/api/water/meters'");
+  const post = api.indexOf("app.post('/api/water/meters/:id'");
+  assert.ok(get !== -1 && post !== -1);
+  assert.match(api.slice(get, get + 120), /require_panel\('water'\)/,
+    'populating the selector must not need admin');
+  assert.match(api.slice(post, post + 140), /require_panel\('water-admin'\)/,
+    'deciding which meter may email you at 3am must');
+});
+
+test('the per-meter test send uses the same resolution the collector will', function () {
+  // A test that proves a different path than the real one proves nothing.
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const i = api.indexOf("app.post('/api/water/meters/:id/test'");
+  assert.ok(i !== -1, 'the test endpoint must exist');
+  assert.match(api.slice(i, i + 1800), /meters\.recipients_for\(m, cfg\.alert_email_to\)/);
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  assert.match(run, /email_to: meters\.recipients_for\(m, cfg\.alert_email_to\)/);
+  assert.match(run, /email_to: meters\.recipients_for\(owned_meter_row, cfg\.alert_email_to\)/);
+});
+
+test('the schema is applied by the web server, not only by the collector', function () {
+  // Two failures this fixes, and both look like the app being broken rather than not yet started:
+  //   - a dev laptop with no dongle never runs the collector, so a fresh clone had no tables and
+  //     every page 500'd. `vite dev` proxies /api to this server, so it hit the same wall.
+  //   - on the server, restarting the web app after a pull but BEFORE the collector meant new code
+  //     querying columns that did not exist yet.
+  // ensure_schema is CREATE TABLE IF NOT EXISTS + additive column checks, so two callers is safe.
+  const srv = fs.readFileSync(require.resolve('../../../../../server_home_assist_8050.js'), 'utf8');
+  assert.match(srv, /ensure_schema\(db\)/, 'the web server must apply the schema on boot');
+  const i = srv.indexOf('ensure_schema(db)');
+  const j = srv.indexOf('warm_all()');
+  assert.ok(i !== -1 && j !== -1 && i < j, 'schema must be applied BEFORE modules warm');
+  // Never in create_app: the app-building tests must keep working with no MySQL at all.
+  const boot = srv.slice(srv.indexOf('function start_server'));
+  assert.match(boot, /ensure_schema/, 'and it must live inside start_server, after listen');
+});
+
+test('the registry seeds your own meter with no collector running', function () {
+  // water_meters is written by the collector as it hears things. Your OWN meter cannot wait for
+  // that: with no radio attached the selector would be empty, which is indistinguishable from a
+  // dead receiver at the moment someone is most likely to be looking.
+  const mod = fs.readFileSync(require.resolve('../module'), 'utf8');
+  assert.match(mod, /warm: warm/, 'the water module must expose a startup hook');
+  assert.match(mod, /meters\.ensure_owned\(cfg\.meter_id\)/);
+  // Both processes do it, on purpose -- they start independently and either may be first.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  assert.match(run, /await meters\.ensure_owned\(meter_id\)/);
+});
+
+test('warm_all is ordered and cannot take the server down', function () {
+  // Fire-and-forget meant a seed could race the CREATE TABLE that makes it possible, fail silently,
+  // and leave an empty dropdown. Awaited now -- but still per-module best-effort, because one
+  // module failing to warm must never stop the server serving.
+  const reg = fs.readFileSync(require.resolve('../../registry'), 'utf8');
+  assert.match(reg, /async function warm_all/);
+  assert.match(reg, /try \{ await m\.warm\(\); \}/);
+  assert.match(reg, /catch \(e\) \{ console\.warn/);
+});

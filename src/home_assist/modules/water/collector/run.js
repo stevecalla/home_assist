@@ -180,6 +180,7 @@ async function create_collector(options) {
   // their per-meter run-alarm memory. Keyed by meter id so one neighbour's shower cannot cancel
   // another's all-clear.
   let observed_meters = [];
+  let owned_meter_row = null;
   const observed_alarm_run = new Map();
 
   function rx_for(id) {
@@ -411,6 +412,7 @@ async function create_collector(options) {
           const r = await alerts.dispatch(alert, cfg, {
             meter_id: pid,
             notify: !!m.notify,
+            email_to: meters.recipients_for(m, cfg.alert_email_to),
             last_gallons: (other_last.get(pid) || {}).gallons ?? null,
           });
           if (r.sent) log('ALERT [' + alert.kind + '] meter ' + pid + ' ' + alert.message + '  (' + r.note + ')');
@@ -443,6 +445,7 @@ async function create_collector(options) {
         // with packets but no hourly rows would evaluate to a flat zero every hour, which the
         // overnight rule correctly reads as "no water" and the continuous rule as "nothing running".
         observed_meters = reg.filter(function (m) { return !m.owned && m.has_readings; });
+        owned_meter_row = reg.find(function (m) { return Number(m.meter_id) === Number(meter_id); }) || null;
       } catch (e) { /* keep the previous map */ }
       const now = new Date();
       const hours = await readings.hour_map(meter_id, 72);
@@ -458,6 +461,10 @@ async function create_collector(options) {
         today_keys.push(time.day_key(now) + 'T' + String(h).padStart(2, '0'));
       }
       const ctx = {
+        meter_id: meter_id,
+        // Your own meter can have a dedicated address list too -- useful when the house alerts go
+        // to two people but a second property should not.
+        email_to: meters.recipients_for(owned_meter_row, cfg.alert_email_to),
         last_gallons: last ? last.gallons : null,
         today_gallons: rules.sum_hours(hours, today_keys).total,
       };

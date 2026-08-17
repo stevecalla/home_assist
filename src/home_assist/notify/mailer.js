@@ -92,21 +92,76 @@ async function verify() {
 }
 
 /**
+ * Split a recipient string into addresses.
+ *
+ * Accepts commas, semicolons, whitespace and newlines, because those are all things people
+ * actually paste. Deduplicated case-insensitively -- the same address twice would send the same
+ * alert twice, and the second copy teaches you to skim the first.
+ */
+function parse_recipients(raw) {
+  const seen = new Set();
+  const out = [];
+  String(raw === undefined || raw === null ? '' : raw)
+    .split(/[,;\s]+/)
+    .forEach(function (a) {
+      const t = a.trim();
+      if (!t) return;
+      const k = t.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(t);
+    });
+  return out;
+}
+
+/**
+ * Is this plausibly an address? Deliberately loose -- one @, something either side, a dot in the
+ * domain. Anything stricter rejects addresses that are legal and working, and the cost of a false
+ * rejection here is that someone cannot receive leak alerts at their real address.
+ */
+const ADDRESS_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function valid_address(a) { return ADDRESS_RE.test(String(a || '').trim()); }
+
+/**
  * Send one message. Never throws — returns { ok, error } so the caller can record the outcome
  * in water_alerts.delivered without a try/catch at every call site.
+ *
+ * `to` may be a list. The result carries `accepted` and `rejected` straight from the SMTP
+ * conversation, because "the send succeeded" and "all four people got it" are different facts:
+ * three good addresses and one typo previously recorded as a clean success, and the typo was
+ * invisible until someone said they never get the alerts.
  */
 async function send(mail) {
   const t = transporter();
   if (!t) return { ok: false, error: 'email not configured' };
   const c = config();
+  const list = parse_recipients(mail.to !== undefined && mail.to !== null && String(mail.to).trim()
+    ? mail.to : c.recipient);
+  if (!list.length) return { ok: false, error: 'no recipient configured' };
+  const bad = list.filter(function (a) { return !valid_address(a); });
+  // Send to the good ones anyway. Refusing the whole message because one address is malformed
+  // would let a typo silence an alert for everyone else on the list.
+  const good = list.filter(valid_address);
+  if (!good.length) return { ok: false, error: 'no valid recipient (' + bad.join(', ') + ')' };
+
   return with_deadline(
     t.sendMail({
       from: { name: mail.from_name || ('home_assist (' + os.hostname() + ')'), address: c.sender },
-      to: mail.to || c.recipient,
+      to: good,
       subject: mail.subject,
       text: mail.text,
       html: mail.html,
-    }).then(function (info) { return { ok: true, response: info && info.response }; }),
+    }).then(function (info) {
+      const accepted = (info && info.accepted ? info.accepted : good).map(String);
+      const rejected = (info && info.rejected ? info.rejected : []).map(String).concat(bad);
+      return {
+        ok: accepted.length > 0,
+        response: info && info.response,
+        accepted: accepted,
+        rejected: rejected,
+        error: accepted.length ? undefined : 'all recipients rejected',
+      };
+    }),
     SMTP_TIMEOUT_MS * 3,     // a send may legitimately take longer than a verify
     'SMTP send'
   );
@@ -144,4 +199,5 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-module.exports = { config, configured, verify, send, close, html_alert, with_deadline, SMTP_TIMEOUT_MS };
+module.exports = {
+  parse_recipients, valid_address, config, configured, verify, send, close, html_alert, with_deadline, SMTP_TIMEOUT_MS };

@@ -451,7 +451,43 @@ but not worth the queries.
 | Value labels on the **Diagnostics** reception chart | Packets/minute is a small integer you compare against ~14, so the exact number is the point |
 | **`per_hour` recorded on overnight and continuous alerts**, shown in a collapsed `<details>` | "Water ran overnight: 95 gal" is a *claim*. Every figure behind it was already computed and thrown away; now it is stored. An alert you cannot check is one you either believe blindly or learn to ignore. `null`, never `0`, for an hour with no reading |
 
-259 tests pass, 58/58 files parse, SPA builds clean.
+### Pass C -- email to more than one person, and per meter
+
+| What | Detail |
+|---|---|
+| **Multiple recipients** | `alert_email_to` is now a list. Split on commas, semicolons, whitespace or newlines -- people paste all four -- then trimmed, deduped case-insensitively and format-checked |
+| **One bad address does not silence the list** | The valid recipients are still sent to; the malformed one is reported. Refusing the whole message over a spelling mistake would mean a leak alert reaching nobody |
+| **Per-meter address** | New `water_meters.notify_email`. Set = that meter's alerts go there. Blank = falls back to the global list. Applies to your own meter too |
+| **The ledger names who accepted** | `email:partial — rejected x@y.com` instead of a single `delivered = 1`. Three good addresses and one typo used to record as a clean success, and the typo stayed invisible until someone said they never get the alerts |
+| **New Meters page** (`water-admin`) | Label, gallons-per-unit, delivery on/off, address list, and a **Send test email** button per meter. Read-only: owned, model, packets seen, last heard |
+| **The safety rule** | `notify` cannot be switched on for a meter that is not yours unless it has its own address. Otherwise it falls through to the global list and a neighbour's overnight flow starts emailing you at 3am -- one checkbox, and nobody would guess it had been configured. Enforced in `meters.update()`, not in the form: the form is not the only way in |
+
+The test button resolves recipients through **the same `recipients_for()` the collector uses**. A
+test that proves a different path than the real one proves nothing.
+
+Panel split stays deliberate: `GET /api/water/meters` is `water` (populating the selector is not an
+administrative act), `POST` is `water-admin` (deciding which meter may email you at 3am is).
+
+### Pass C.1 -- the schema is applied by the web server too
+
+`ensure_schema` only ever ran in `collector_water.js`. That was wrong in two ways, and both look
+like the app being broken rather than the app not having started:
+
+| Situation | What happened |
+|---|---|
+| Dev laptop, no dongle | The collector is never started, so a fresh clone had **no tables at all** and every page 500'd. `vite dev` proxies `/api` to this server, so it hit the same wall |
+| Server, after a pull | Restarting the web app **before** the collector meant new code querying columns that did not exist yet |
+
+| Change | Detail |
+|---|---|
+| `start_server()` applies the schema on boot | After `listen`, never in `create_app` — the app-building tests must keep working with no MySQL at all. `CREATE TABLE IF NOT EXISTS` + additive column checks, so two callers is safe and every-boot is the point |
+| `warm_all()` is **awaited and ordered** | Schema → seed → first request. Fire-and-forget let a seed race the `CREATE TABLE` that makes it possible, fail silently, and leave an empty dropdown. Still per-module best-effort: one module failing must never stop the server serving |
+| `water.warm()` calls `ensure_owned()` | Your own meter is in `water_meters` before the radio has decoded anything. **Both** processes do this, deliberately — they start independently and either may be first (or the only one) |
+
+If the schema cannot be applied the server still starts and says so, rather than dying: a login page
+that loads and reports a database problem beats a process that will not boot.
+
+269 tests pass, 58/58 files parse, SPA builds clean.
 
 ## Open items
 
