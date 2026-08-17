@@ -129,6 +129,10 @@ export default function Diagnostics() {
               }))}
               height={140}
               unit="packets"
+              // Packets/minute is a small integer you compare against ~14, so the exact number is
+              // the point. BarChart drops the labels itself once the bars get too narrow, which is
+              // what keeps a 24h window readable.
+              showValues
               formatTip={(d) => d.label + ' · ' + d.value + ' packets'}
               emptyMessage="No reception rows yet."
             />

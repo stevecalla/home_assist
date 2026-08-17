@@ -215,19 +215,44 @@ test('the observed backfill can never overwrite a live hour', function () {
   assert.match(body, /heard_at_mtn/, 'hour buckets are LOCAL -- the UTC column would misfile them');
 });
 
-test('the card clock and the banner clock are the same clock', function () {
-  // The bug: the card read the odometer and last-heard off the newest row of the PACKET array while
-  // the banner read them from /api/water/status. Two sources, two poll intervals, so the banner said
-  // 3:32:34 and the card said 3:32:30 with "9s ago" -- both honest, four seconds apart. Now that
-  // status follows the selection there is no reason for a second source, and one source cannot
-  // disagree with itself.
+test('the banner, the clock chip and the newest row are one clock', function () {
+  // Three numbers within an inch of each other, from two tables with different write latencies:
+  // water_collector_state is stamped the instant a packet is decoded, water_packets is written by a
+  // batched flush and then fetched by a separate poll. Both honest, and four seconds apart on
+  // screen, which reads as a bug.
+  //
+  // One derived value, used everywhere. When the packet table is visible the newest row IS the
+  // answer -- a clock that disagrees with the row beneath it is worse than one that is two seconds
+  // conservative -- and everything else falls back to state.
   const ui = fs.readFileSync(
     require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
-  assert.match(ui, /const cardOdo = liveOdo;/);
-  assert.match(ui, /const cardLastAt = r\.last_read_at;/);
-  assert.match(ui, /const cardSecs = secsSince;/);
-  assert.ok(ui.indexOf('rtNewest') === -1,
-    'the packet-array fallback is what produced two clocks and must be gone');
+  assert.match(ui, /const lastPacketAt = \(mode === 'realtime' && newestRow\)/);
+  assert.match(ui, /fullStamp\(lastPacketAt, status\.tz\)/, 'the banner must use it too');
+  assert.match(ui, /const cardLastAt = lastPacketAt;/);
+  assert.match(ui, /const cardSecs = lastPacketSecs;/);
+  assert.match(ui, /secondsSince=\{lastPacketSecs\}/, 'and so must the live chart edge');
+  assert.ok(ui.indexOf('secsSince') === -1,
+    'the second, independently-derived counter is what made them disagree');
+  // rtFocus, not rtPackets: on "all meters" the newest row can be a neighbour's, and letting that
+  // set the banner would claim YOUR meter had just been heard when it had not.
+  assert.match(ui, /const newestRow = rtFocus\.length/);
+});
+
+test('an alert records the numbers behind its own sentence', function () {
+  // "Water ran overnight: 95 gal" is a claim. A claim you cannot check is one you either believe
+  // blindly or learn to ignore, and neither is what you want at 3am -- so the hour-by-hour figures
+  // the total was computed from are stored with the alert and shown under it.
+  const rules = fs.readFileSync(require.resolve('../rules/leak_rules'), 'utf8');
+  const count = rules.split('per_hour: keys.map').length - 1;
+  assert.equal(count, 2, 'both the overnight and continuous rules must show their work');
+  // null, not 0: an hour with no reading is not an hour with no water, and on a leak monitor that
+  // is the distinction that matters most.
+  assert.match(rules, /hasOwnProperty\.call\(hours, k\) \? Number\(hours\[k\]\) : null/);
+
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Alerts.jsx'), 'utf8');
+  assert.match(ui, /<details/, 'the breakdown must be collapsed by default, not shouted');
+  assert.match(ui, /per_hour/);
 });
 
 test('"mine" is decided by the OWNED meter, never by the selected one', function () {

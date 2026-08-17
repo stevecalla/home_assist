@@ -39,10 +39,15 @@ const TICK_MS = 60 * 1000;
 // nothing new for fifty-six of them, then fifteen rows at once. A "real time" view fed by a
 // once-a-minute write is not real time, however fast the browser asks.
 //
-// Five seconds is one INSERT of one or two rows — cheaper than the per-packet round trip this
-// buffer exists to avoid, and fast enough that a row is on screen about as soon as the radio
-// decoded it.
-const PACKET_FLUSH_MS = 5 * 1000;
+// Five seconds was one INSERT of one or two rows — cheap, but it made water_packets lag
+// water_collector_state by up to five seconds, and the two are shown side by side. The banner reads
+// state ("last packet 20:30:18") while the table reads packets (newest row 20:30:14), and a five
+// second disagreement between two numbers an inch apart reads as a bug even though both are true.
+//
+// 2.5s is still a batched INSERT (a meter transmits every ~4s, so a flush carries 1-2 rows for a
+// two-meter site) and halves the visible skew. The UI does the rest -- Monitor derives ONE
+// last-packet time and shows it everywhere, rather than letting two clocks race.
+const PACKET_FLUSH_MS = 2500;
 // A decoder field that is present but not a number (or absent entirely) must become NULL, not 0 —
 // "the radio did not report this" and "the radio reported zero" are different facts, and -M level
 // being off is exactly the case that produces the first one.

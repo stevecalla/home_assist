@@ -284,12 +284,6 @@ export default function Monitor() {
   const windowEnd = tailLast !== null && pts.length ? Math.max(tailLast, pts[pts.length - 1].odometer)
     : pts.length ? pts[pts.length - 1].odometer : null;
   const usedInWindow = pts.length && windowEnd !== null ? Math.max(0, windowEnd - pts[0].odometer) : 0;
-  // Seconds since the meter was last heard, recomputed on the 1s tick rather than the 5s poll so
-  // the number moves every second even between fetches.
-  const lastHeardMs = r.last_read_at ? new Date(r.last_read_at).getTime() : null;
-  const secsSince = lastHeardMs === null || Number.isNaN(lastHeardMs)
-    ? null : Math.max(0, Math.round((tick - lastHeardMs) / 1000));
-
   const recentPulse = pts.slice(-10);
   const pulseAvg = recentPulse.length
     ? recentPulse.reduce((a, p) => a + (p.packets || 0), 0) / recentPulse.length : 0;
@@ -347,19 +341,33 @@ export default function Monitor() {
   })();
   const rtSnrBand = band_of(rt && rt.quality, 'snr', rtLastSnr);
 
-  // ONE clock, for every tab and every selection.
+  // ── ONE last-packet time, shown in all three places ────────────────────────────────────────
   //
-  // This used to read the odometer and the last-heard time off the newest row of the packet ARRAY
-  // whenever a specific meter was picked, because /api/water/status was owned-only and had nothing
-  // to say about a neighbour. It is not owned-only any more, and keeping the packet fallback meant
-  // two sources refreshed by two different polls: the banner said 3:32:34 while the card said
-  // 3:32:30 and "9s ago" -- four seconds apart, both honestly reporting what they last fetched.
+  // Three numbers used to sit within an inch of each other and disagree: the banner ("Last packet
+  // 20:30:18", from water_collector_state), the clock chip, and the newest row of the table
+  // (20:30:14, from water_packets). Both tables are honest -- state is stamped the instant a packet
+  // is decoded, while water_packets is written by a batched flush and then fetched by a separate
+  // poll, so the table is always a little behind. Two true numbers, one visible contradiction.
   //
-  // Reading everything from `status` makes them identical by construction rather than by timing.
-  // The 1-second `tick` still ages the counter smoothly between the 5-second polls.
+  // The resolution is to pick ONE and use it everywhere on the page. When the packet table is on
+  // screen, the newest row IS the answer -- it is the thing you are looking at, and a clock that
+  // disagrees with the row beneath it is worse than a clock that is two seconds conservative.
+  // Otherwise (Heartbeat, Long view, packet capture off, window empty) fall back to state.
+  //
+  // rtFocus, not rtPackets: on "all meters" the newest row may be a neighbour's, and letting that
+  // set the banner would claim YOUR meter had just been heard when it had not. rtFocus already
+  // filters to the meter the page is describing.
+  const newestRow = rtFocus.length ? rtFocus[rtFocus.length - 1] : null;
+  const lastPacketAt = (mode === 'realtime' && newestRow) ? newestRow.heard_at_utc : r.last_read_at;
+  const lastPacketMs = lastPacketAt ? new Date(lastPacketAt).getTime() : null;
+  // Aged on the 1-second tick rather than the 5-second poll, so the number moves every second
+  // instead of freezing in five-second steps -- which on this card reads as "stuck".
+  const lastPacketSecs = lastPacketMs === null || Number.isNaN(lastPacketMs)
+    ? null : Math.max(0, Math.round((tick - lastPacketMs) / 1000));
+
   const cardOdo = liveOdo;
-  const cardLastAt = r.last_read_at;
-  const cardSecs = secsSince;
+  const cardLastAt = lastPacketAt;
+  const cardSecs = lastPacketSecs;
   const cardTitle = selId !== null ? selId + ' — live' : 'Meter — live';
 
   const exportHeaders = mode === 'long' ? lvHeaders : mode === 'realtime' ? rtHeaders : hbHeaders;
@@ -431,8 +439,13 @@ export default function Monitor() {
               METER's timezone, not the browser's, so a laptop on the road still shows house time. */}
           <span className="w-banner-stamp">
             <span className="w-strip-label">Last packet</span>
-            <span className="w-strip-value">{fullStamp(r.last_read_at, status.tz)}</span>
-            <span className="w-strip-label">{r.quiet_minutes === null ? '' : '(' + ago(r.quiet_minutes) + ')'}</span>
+            {/* lastPacketAt, not r.last_read_at: the SAME value the card clock and the newest table
+                row show. Three numbers an inch apart that disagree by four seconds read as a bug
+                even when all three are true. */}
+            <span className="w-strip-value">{fullStamp(lastPacketAt, status.tz)}</span>
+            <span className="w-strip-label">
+              {lastPacketSecs === null ? '' : '(' + ago(Math.floor(lastPacketSecs / 60)) + ')'}
+            </span>
           </span>
         </span>
       </div>
@@ -650,8 +663,8 @@ export default function Monitor() {
                   this thing actually live, right now" without you having to wait a minute to see
                   whether the chart moved. Colour follows the number; the number is the message. */}
               <div>
-                <div key={beat} className={'w-readout-sm w-since ' + sinceClass(secsSince)}>
-                  {secsSince === null ? '—' : secsSince + 's'}
+                <div key={beat} className={'w-readout-sm w-since ' + sinceClass(lastPacketSecs)}>
+                  {lastPacketSecs === null ? '—' : lastPacketSecs + 's'}
                 </div>
                 <div className="w-readout-lab" title={METRIC_HELP.since}>since last packet <i className="w-q">?</i></div>
               </div>
@@ -728,7 +741,7 @@ export default function Monitor() {
                 <RealtimeChart
                   packets={rtFocus}
                   gaps={rt ? rt.gaps : []}
-                  secondsSince={secsSince}
+                  secondsSince={lastPacketSecs}
                   tz={status.tz}
                   height={280}
                   emptyMessage={rt && !rt.enabled

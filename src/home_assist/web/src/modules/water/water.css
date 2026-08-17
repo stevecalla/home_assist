@@ -870,3 +870,15 @@ th.w-grid-num { padding: 6px 8px; }
   color: var(--w-series); border-color: var(--w-series);
 }
 .w-readout-lab[title], .w-tile-label[title], .w-mem span[title] { cursor: help; }
+
+/* The evidence under an alert. Collapsed by default -- the sentence is the message and the numbers
+   are what you open when you want to check it, not a wall of figures to read past every time. */
+.w-alert-detail { margin-top: 6px; }
+.w-alert-detail > summary {
+  cursor: pointer; font-size: 12px; color: var(--w-axis);
+  padding: 2px 0; user-select: none;
+}
+.w-alert-detail > summary:hover { color: var(--text); }
+.w-alert-detail table.w-table.small { font-size: 12px; margin-top: 6px; max-width: 420px; }
+.w-alert-detail table.w-table.small td,
+.w-alert-detail table.w-table.small th { padding: 3px 8px; }
