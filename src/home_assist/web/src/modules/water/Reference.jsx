@@ -74,6 +74,15 @@ export default function Reference() {
           repeat — it exists so a leak that runs all weekend does not send you 400 emails, which is how
           people end up muting the thing that was trying to help.
         </p>
+        <p className="w-chart-sub">
+          <strong>Detection and delivery are separate.</strong> These rules run over{' '}
+          <em>every</em> meter the receiver stores readings for, and the results are recorded so any
+          meter&apos;s history and banner work. Only a meter marked <code>notify</code> is actually
+          emailed or pushed, and that is your own meter unless you change it — a stranger&apos;s
+          shower should never wake you. One exception: <strong>Receiver silent never fires for an
+          observed meter</strong>, because silence there means this antenna lost them, not that
+          their pipe burst.
+        </p>
 
         <div className="w-ref-list">
           {ref.alerts.map((a, i) => {
@@ -378,7 +387,9 @@ export default function Reference() {
             </tr>
             <tr>
               <td><code>water_alerts</code></td>
-              <td>One alert. Also the cooldown ledger.</td>
+              <td>One alert, for one meter. Also the cooldown ledger, keyed on
+                (meter, signal) — so a neighbour's overnight alert can never take the cooldown slot
+                and silence yours.</td>
               <td>a few hundred</td>
               <td>{ref.retention.alerts_retention_days ? ref.retention.alerts_retention_days + ' days' : 'forever'}</td>
             </tr>

@@ -46,6 +46,10 @@ export default function BarChart({
   unit = 'gal',
   formatTip,          // (d) => string
   emptyMessage = 'No data yet.',
+  // Print each bar's value above it. Opt-in, and even then only when the bars are wide enough to
+  // hold a number without collision -- see VALUE_LABEL_MIN_PX. A chart that has to be hovered to be
+  // read is a chart you take on faith, but overlapping labels are worse than none.
+  showValues = false,
 }) {
   const [hover, setHover] = useState(null);
   const [ref, measured] = useWidth();
@@ -69,6 +73,13 @@ export default function BarChart({
   const y = (v) => padT + plotH - (v / niceMax) * plotH;
 
   const ticks = [0, niceMax / 2, niceMax];
+
+  // Value labels only when they fit. 22px holds three digits at 10px with a little air; below that
+  // "188" from one bar runs into "203" from the next and the chart becomes less readable than the
+  // one with no labels at all. 90 and 365 days fall well under this, and that is the correct answer
+  // -- the exact numbers are one click away on the table flip and in the CSV.
+  const VALUE_LABEL_MIN_PX = 22;
+  const labelValues = showValues && slot >= VALUE_LABEL_MIN_PX;
 
   return (
     <div className="w-chart" ref={ref}>
@@ -122,6 +133,19 @@ export default function BarChart({
               ) : (
                 <rect className="w-bar" x={bx} y={padT + plotH - 1} width={barW} height={1} />
               )}
+              {/* Only OBSERVED bars get a number. Printing "0" over a no-data stub would erase the
+                  one distinction this chart works hardest to keep: on a leak monitor "no reading"
+                  and "no water" are opposite conclusions. */}
+              {labelValues && d.observed ? (
+                <text
+                  className="w-bar-value"
+                  x={bx + barW / 2}
+                  y={Math.max(padT + 8, y(d.value) - 4)}
+                  textAnchor="middle"
+                >
+                  {fmt(d.value)}
+                </text>
+              ) : null}
             </g>
           );
         })}

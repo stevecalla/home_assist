@@ -154,6 +154,7 @@ const TABLES = [
     ddl: `CREATE TABLE IF NOT EXISTS water_alerts (
      id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
      purpose ${PURPOSE_COL}'${SHORT.water_alerts}',
+     meter_id      BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'which meter this is about; 0 = written before alerts were per-meter',
      alert_key     VARCHAR(96)     NOT NULL COMMENT 'cooldown key, e.g. overnight:2026-08-01',
      kind          VARCHAR(24)     NOT NULL COMMENT 'overnight | continuous | stale | summary | test',
      severity      VARCHAR(16)     NOT NULL DEFAULT 'default',
@@ -164,8 +165,9 @@ const TABLES = [
      fired_at_utc  DATETIME        NOT NULL,
      fired_at_mtn  DATETIME        NOT NULL,${CREATED_AT},
      PRIMARY KEY (id),
-     KEY idx_key_time (alert_key, fired_at_utc),
-     KEY idx_time (fired_at_utc)
+     KEY idx_key_time (meter_id, alert_key, fired_at_utc),
+     KEY idx_time (fired_at_utc),
+     KEY idx_meter_time (meter_id, fired_at_utc)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
 
@@ -265,6 +267,7 @@ const TABLES = [
      model            VARCHAR(32)     NULL COMMENT 'as reported by the decoder, e.g. Badger-ORION',
      owned            TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = the meter leak rules and alerts run for',
      collect_readings TINYINT(1)      NOT NULL DEFAULT 0 COMMENT 'store readings/hourly for it, not just packets',
+     notify           TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = DELIVER this meter alerts by email/ntfy. Off for neighbours by design',
      gallons_per_unit DECIMAL(10,4)   NOT NULL DEFAULT 1 COMMENT 'classic Orion counts 1 gal; newer endpoints 0.1. Wrong value = silent 10x error',
      first_heard_utc  DATETIME        NULL,
      first_heard_mtn  DATETIME        NULL,
@@ -328,6 +331,11 @@ const ADDED_COLUMNS = [
   ['water_packets', 'created_at_mtn', 'DATETIME NULL'],
   ['water_packets', 'created_at_utc', 'DATETIME NULL'],
   ['water_reception', 'packets', 'INT UNSIGNED NOT NULL DEFAULT 0'],
+  // 0, not the owned meter id: an existing row was raised before alerts knew about meters, and
+  // stamping it with today's owned id would be inventing a fact. The API maps 0 to yours for
+  // display, which is honest -- there was only one meter alerting when those rows were written.
+  ['water_alerts', 'meter_id', 'BIGINT UNSIGNED NOT NULL DEFAULT 0'],
+  ['water_meters', 'notify', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = alerts for this meter are DELIVERED, not just recorded'"],
   ['water_meters', 'purpose', purpose_def(SHORT.water_meters, 'meter_id')],
   ['water_meters', 'created_at_mtn', 'DATETIME NULL'],
   ['water_meters', 'created_at_utc', 'DATETIME NULL'],

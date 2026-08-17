@@ -406,7 +406,41 @@ you at 3am.
 **Still owned-only, on purpose:** leak rules, every alert, the daily summary, and the raw-sample
 card on Diagnostics (raw samples are the undecoded firehose -- filtering them defeats the card).
 
-250 tests pass, 58/58 files parse, SPA builds clean.
+### Pass B.1 -- five things the first pass got wrong
+
+Found by looking at the running server, which is the only place three of these could have shown up.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Banner said 3:32:34, the card said 3:32:30 and "9s ago" | The card read the odometer and last-heard off the newest row of the **packet array**; the banner read `/api/water/status`. Two sources, two poll intervals, both honest | Deleted the packet fallback. Status follows the selection now, so there is no reason for a second source -- and one source cannot disagree with itself |
+| Every row of 14905174 badged **mine** | The cell renderer was handed `status.meter_id`, which now means "the meter in view" | `status.own_meter_id`. The stored `is_ours` column was always right; only the display was wrong |
+| Diagnostics showed nothing for an observed meter | The reception chart and all four stats plotted `packets_ours`, which is **zero by definition** on a neighbour's row -- a flatline meaning "the radio heard nothing" | `/api/water/reception` now returns `packets_meter`; the chart and stats read it. Same bug the heartbeat chart had; this copy was missed |
+| No numbers on the Long view bars | Never built | `showValues` on BarChart, with a 22px-per-bar floor so 90d and 365d drop the labels instead of overlapping them. Only **observed** bars get a number -- a `0` over a no-data stub erases the distinction the chart works hardest to keep |
+| Alerts were owned-only | By design, but the wrong design | See below |
+
+**Two of these were the same mistake:** letting one variable mean both "my meter" and "the meter in
+view". That is the exact conflation Pass B existed to remove, reintroduced one argument at a time.
+Both are now pinned by test.
+
+### Pass B.2 -- alerts per meter
+
+**Detection runs for every meter. Delivery does not.**
+
+| Piece | Behaviour |
+|---|---|
+| `water_alerts.meter_id` | New column. Existing rows carry `0` -- written before alerts knew about meters, and stamping them with today's owned id would invent a fact. The API maps `0` to yours for display, which is honest: there was only one meter alerting then |
+| **Cooldown ledger** | Now keyed `(meter_id, alert_key)`. **This is the dangerous one.** Keyed on `alert_key` alone, a neighbour whose overnight rule tripped first takes the slot and silences yours for six hours -- two houses sharing one mutex, and the failure is completely invisible |
+| `water_meters.notify` | Defaults to **0**. `ensure_owned()` sets it to 1 for your meter on every boot, so it is true from first run rather than something to remember |
+| `tick_observed()` | Same pure rules, each observed meter's own hour buckets, on the slow tick. `ingest_other()` on the packet path still touches no rule and no alert |
+| **Receiver silent** | Never fires for an observed meter. Silence there means *this antenna lost them*, not *their pipe burst*. Guarded twice: `last_read_at: now` makes it unable to trip, and an explicit `kind === 'stale'` skip |
+| Alerts page + Monitor card | Follow the picker. "All meters" is meaningful here -- unlike a usage chart, two meters' alerts can sit in one list without being summed into a lie |
+| **Three delivery states, not two** | `✓ sent`, `✕ not sent` (a broken channel), and `◉ recorded only` (notify off). The last two render identically as a red cross unless separated, and one is the system working as designed -- conflating them teaches you to ignore the red ones that are real |
+
+Only meters with `has_readings` get rules run over them. A meter with packets but no hourly rows
+evaluates to a flat zero every hour, which the overnight rule correctly reads as "no water" -- true,
+but not worth the queries.
+
+258 tests pass, 58/58 files parse, SPA builds clean.
 
 ## Open items
 

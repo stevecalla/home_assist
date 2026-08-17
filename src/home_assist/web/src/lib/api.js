@@ -57,7 +57,7 @@ export const api = {
   waterHourly: (hours, meter) => jget('/api/water/hourly?hours=' + (hours || 48) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterDaily: (days, meter) => jget('/api/water/daily?days=' + (days || 30) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterReadings: (limit, meter) => jget('/api/water/readings?limit=' + (limit || 25) + '&meter=' + encodeURIComponent(meter || 'mine')),
-  waterAlerts: (limit) => jget('/api/water/alerts?limit=' + (limit || 50)),
+  waterAlerts: (limit, meter) => jget('/api/water/alerts?limit=' + (limit || 50) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterSettings: () => jget('/api/water/settings'),
   waterSaveSettings: (patch) => jpost('/api/water/settings', patch),
   waterTestAlert: () => jpost('/api/water/test-alert', {}),

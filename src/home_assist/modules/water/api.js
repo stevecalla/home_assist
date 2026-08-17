@@ -437,6 +437,10 @@ function mount(app) {
           minute_mtn: r.minute_mtn,
           packets_total: Number(r.packets_total),
           packets_ours: Number(r.packets_ours),
+          // Packets from the meter this row is ABOUT. On a neighbour's row packets_ours is zero by
+          // definition, so a chart plotting that column flatlines -- and a flat zero on this chart
+          // means "the radio heard nothing", the exact wrong conclusion.
+          packets_meter: Number(r.packets_meter),
           other_ids: r.other_ids || null,
           rssi_avg: r.rssi_avg === null ? null : Number(r.rssi_avg),
           rssi_best: r.rssi_best === null ? null : Number(r.rssi_best),
@@ -482,15 +486,26 @@ function mount(app) {
 
   // ── alert history ──
   app.get('/api/water/alerts', require_panel('water'), guard(async function (req, res) {
-    const rows = await alerts.recent(req.query.limit || 50);
+    const cfg = await settings.all();
+    const sel = resolve_meter(req.query.meter, cfg);
+    // 'all' means every meter's history in one list, which is genuinely useful here -- unlike a
+    // usage chart, alerts from two meters can sit side by side without being summed into a lie.
+    const filter = sel.selection === 'all' ? 0 : sel.meter_id;
+    const rows = await alerts.recent(req.query.limit || 50, filter, cfg.meter_id);
     res.json({
       ok: true,
+      meter_id: sel.meter_id,
+      own_meter_id: cfg.meter_id,
+      selection: sel.selection,
       alerts: rows.map(function (r) {
         let detail = null;
         // mysql2 returns JSON columns already parsed on some versions, as a string on others.
         if (r.detail) { try { detail = typeof r.detail === 'string' ? JSON.parse(r.detail) : r.detail; } catch (e) { detail = null; } }
         return {
           id: r.id, alert_key: r.alert_key, kind: r.kind, severity: r.severity,
+          // 0 = written before alerts were per-meter, when only one meter could raise one.
+          meter_id: Number(r.meter_id) || cfg.meter_id,
+          is_ours: (Number(r.meter_id) || cfg.meter_id) === cfg.meter_id,
           message: r.message, detail: detail,
           delivered: !!r.delivered, delivery_note: r.delivery_note,
           fired_at: new Date(r.fired_at_utc + 'Z').toISOString(),
