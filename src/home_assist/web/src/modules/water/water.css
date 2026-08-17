@@ -882,3 +882,45 @@ th.w-grid-num { padding: 6px 8px; }
 .w-alert-detail table.w-table.small { font-size: 12px; margin-top: 6px; max-width: 420px; }
 .w-alert-detail table.w-table.small td,
 .w-alert-detail table.w-table.small th { padding: 3px 8px; }
+
+/* ── Meters admin ──────────────────────────────────────────────────────── */
+
+.w-meter-row {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-left-color: var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow);
+}
+/* Your meter is marked by a border, not by a background wash -- a tinted card would compete with
+   the status colors the rest of the module reserves for meaning. */
+.w-meter-row.owned { border-left-color: var(--w-good); }
+
+.w-meter-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.w-meter-id { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.w-meter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px 20px;
+}
+.w-meter-grid label { display: block; }
+.w-meter-grid input[type="text"], .w-meter-grid input:not([type]) { width: 100%; }
+.w-meter-grid .w-field-label { display: block; margin-bottom: 4px; }
+.w-meter-grid .w-field-help { display: block; margin-top: 4px; }
+
+.w-check { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
+.w-check input { width: auto; }
+
+.w-meter-actions {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+}
+.w-meter-ok { color: var(--w-good); font-size: 13px; font-weight: 600; }
+
+@media (max-width: 700px) {
+  .w-meter-grid { grid-template-columns: 1fr; }
+}

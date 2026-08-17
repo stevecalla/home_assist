@@ -406,8 +406,49 @@ function mount(app) {
       ok: true,
       own_meter_id: cfg.meter_id,
       observed_retention_days: cfg.observed_retention_days,
+      // The fallback shown beside an empty per-meter address box, so "blank" is never a mystery.
+      default_email_to: mailer.parse_recipients(cfg.alert_email_to).join(', ')
+        || mailer.config().recipient || mailer.config().sender || '',
+      email_enabled: !!cfg.alert_email_enabled,
       meters: list,
     });
+  }));
+
+  // ── editing a meter ────────────────────────────────────────────────────────────────────────
+  //
+  // water-admin, not water: choosing which meter you LOOK at is not administrative, but deciding
+  // which meter is allowed to email you at 3am certainly is.
+  app.post('/api/water/meters/:id', require_panel('water-admin'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const r = await meters.update(req.params.id, req.body || {}, cfg.meter_id);
+    if (!r.ok) return res.status(400).json(r);
+    res.json({ ok: true, meters: await meters.list() });
+  }));
+
+  // Prove the address works BEFORE a leak has to. A per-meter test send, using exactly the same
+  // resolution the collector will use -- the meter's own list if it has one, otherwise the global.
+  app.post('/api/water/meters/:id/test', require_panel('water-admin'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const id = Number(req.params.id) || 0;
+    const list = await meters.list();
+    const m = list.find(function (x) { return Number(x.meter_id) === id; });
+    if (!m) return res.status(404).json({ ok: false, error: 'no such meter' });
+    const to = meters.recipients_for(m, cfg.alert_email_to);
+    const mail = {
+      subject: '[WATER] Test alert — meter ' + id,
+      text: 'Test alert from home_assist for meter ' + id + '. If you are reading this, alerts for '
+        + 'this meter can reach you.',
+      html: mailer.html_alert({
+        title: 'Water monitor',
+        headline: 'Test alert — meter ' + id,
+        color: alerts.COLORS.test,
+        rows: [['Meter', String(id)], ['Delivery', m.notify ? 'on' : 'recorded only (delivery is off)'],
+          ['Recipients', to || '(none configured)']],
+        footer: 'Sent from the Meters page. Nothing was recorded in the alert history.',
+      }),
+    };
+    const r = await mailer.send({ to: to || undefined, subject: mail.subject, text: mail.text, html: mail.html });
+    res.json({ ok: true, sent: r.ok, to: to, accepted: r.accepted || [], rejected: r.rejected || [], error: r.error || null });
   }));
 
   // ── reception: the persistent "is the radio hearing my meter" record ──

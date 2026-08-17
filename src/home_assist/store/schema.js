@@ -268,6 +268,7 @@ const TABLES = [
      owned            TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = the meter leak rules and alerts run for',
      collect_readings TINYINT(1)      NOT NULL DEFAULT 0 COMMENT 'store readings/hourly for it, not just packets',
      notify           TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = DELIVER this meter alerts by email/ntfy. Off for neighbours by design',
+     notify_email     VARCHAR(500)    NULL COMMENT 'Where THIS meter alerts go. Blank = the global alert_email_to list',
      gallons_per_unit DECIMAL(10,4)   NOT NULL DEFAULT 1 COMMENT 'classic Orion counts 1 gal; newer endpoints 0.1. Wrong value = silent 10x error',
      first_heard_utc  DATETIME        NULL,
      first_heard_mtn  DATETIME        NULL,
@@ -336,6 +337,7 @@ const ADDED_COLUMNS = [
   // display, which is honest -- there was only one meter alerting when those rows were written.
   ['water_alerts', 'meter_id', 'BIGINT UNSIGNED NOT NULL DEFAULT 0'],
   ['water_meters', 'notify', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = alerts for this meter are DELIVERED, not just recorded'"],
+  ['water_meters', 'notify_email', 'VARCHAR(500) NULL'],
   ['water_meters', 'purpose', purpose_def(SHORT.water_meters, 'meter_id')],
   ['water_meters', 'created_at_mtn', 'DATETIME NULL'],
   ['water_meters', 'created_at_utc', 'DATETIME NULL'],

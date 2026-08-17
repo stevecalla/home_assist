@@ -94,9 +94,33 @@ function start_server(port) {
     if (!fs.existsSync(WEB_DIST)) console.log('  NOTE: React app not built yet — run `npm run home_assist_build`.');
     console.log('  Reminder: the radio + alerts run in collector_water.js, not here.');
     console.log('  Press Ctrl-C to stop.\n');
-    // Warm module caches so the first request already has live data. AFTER listen, never in create_app.
-    try { require('./src/home_assist/modules/registry').warm_all(); }
-    catch (e) { console.warn('  [warm] module warm-up skipped: ' + e.message); }
+    // Bring the database up to the current schema, THEN warm the modules.
+    //
+    // This used to run only in collector_water.js, which was wrong in two ways that both look like
+    // the app being broken rather than the app not having started:
+    //
+    //   - A dev laptop with no dongle never runs the collector, so a freshly cloned repo had no
+    //     tables at all and every page 500'd. `vite dev` proxies /api here, so it hit the same wall.
+    //   - On the server, restarting the web app after a pull but BEFORE the collector meant the new
+    //     code querying columns that did not exist yet.
+    //
+    // ensure_schema is CREATE TABLE IF NOT EXISTS plus additive column checks, so running it in two
+    // processes is safe and running it every boot is the point. AFTER listen, never in create_app,
+    // so tests that build the app still never touch MySQL.
+    (async function boot() {
+      try {
+        const db = require('./src/home_assist/store/db');
+        await require('./src/home_assist/store/schema').ensure_schema(db);
+      } catch (e) {
+        console.warn('  [schema] not applied: ' + e.message + ' — pages that read MySQL will fail until this is fixed.');
+        return;                                  // warming against a missing schema only adds noise
+      }
+      // Warm module caches so the first request already has live data. Modules also use this hook
+      // to seed anything the UI needs before the collector has ever run -- the water module
+      // registers your own meter here, so the selector is populated on a machine with no radio.
+      try { await require('./src/home_assist/modules/registry').warm_all(); }
+      catch (e) { console.warn('  [warm] module warm-up skipped: ' + e.message); }
+    })();
   });
   server.on('error', function (e) {
     if (e && e.code === 'EADDRINUSE') console.error('PORT ' + p + ' is already in use — stop the other process or set HOMEASSIST_PORT.');

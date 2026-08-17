@@ -144,10 +144,22 @@ async function dispatch(alert, cfg, ctx) {
 
   if (Number(cfg.alert_email_enabled) === 1) {
     const mail = build_email(alert, cfg, ctx);
-    const to = (cfg.alert_email_to || '').trim() || undefined;   // undefined -> mailer's EMAIL_RECIPIENT
+    // Per-meter address list if this meter has one, else the global list, else (undefined) the
+    // mailer's EMAIL_RECIPIENT. The caller resolves the meter's own list -- alerts.js does not
+    // read the registry, so it stays testable without a database.
+    const to = (ctx && ctx.email_to ? String(ctx.email_to) : String(cfg.alert_email_to || '')).trim() || undefined;
     const r = await mailer.send({ to: to, subject: mail.subject, text: mail.text, html: mail.html });
     channels.email = r;
-    notes.push('email:' + (r.ok ? 'ok' : r.error));
+    // WHO accepted, not merely whether the send worked. Three good addresses and one typo used to
+    // record as a clean success, and the typo stayed invisible until someone mentioned they never
+    // get the alerts. A rejected address belongs in the ledger.
+    if (r.ok && r.rejected && r.rejected.length) {
+      notes.push('email:partial — rejected ' + r.rejected.join(', '));
+    } else if (r.ok) {
+      notes.push('email:ok' + (r.accepted && r.accepted.length > 1 ? ' (' + r.accepted.length + ' recipients)' : ''));
+    } else {
+      notes.push('email:' + r.error);
+    }
   }
 
   if (Number(cfg.alert_ntfy_enabled) === 1 && cfg.ntfy_topic) {
