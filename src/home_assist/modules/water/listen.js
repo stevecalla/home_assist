@@ -86,6 +86,32 @@ const SWEEP_HOPS = hop_centres();
 const SWEEP_ARGS = SWEEP_HOPS.map((f) => '-f ' + f + 'M').join(' ') +
   ' -s ' + SWEEP_RATE_KHZ + 'k -M level -C customary -H ' + SWEEP_DWELL_S;
 
+
+/**
+ * The OTHER Orion protocols.
+ *
+ * 223 ("Badger ORION water meter, 100kbps") is a fixed-frequency endpoint and is what the collector
+ * reads. 282 and 290 are newer Orion variants that FREQUENCY-HOP across the whole 902-928 band --
+ * which is why meter 40462356, visible to the utility, has never appeared in this app.
+ *
+ * The point of these two modes is to answer one question before any collector change is made:
+ * IS there anything on 282/290 within reach of this antenna?
+ *
+ * Read the two results very differently:
+ *
+ *   `hop`      Fixed on the collector's own window. Silence here proves almost nothing -- a hopping
+ *              endpoint spends roughly 1.6/26 of its time in this 1.6 MHz slice, so you can miss it
+ *              for many minutes and it still be there. A DECODE here is the interesting result.
+ *   `hopsweep` The real test. Same 13-position sweep as `sweep`, with the extra decoders on. You
+ *              still hear any one slice about 8% of the time, so run it long -- several full passes
+ *              -- before concluding anything. It holds the dongle throughout.
+ *
+ * -M protocol is added so the summary can say WHICH decoder fired. Without it every row is just a
+ * model string and 282 cannot be told from 290.
+ */
+const ORION_PROTOCOLS = '-R 223 -R 282 -R 290';
+const ORION_META = '-F json -M level -M protocol';
+
 /**
  * The listening positions.
  *
@@ -133,6 +159,33 @@ const MODES = {
       ' minutes and the collector is stopped\n' +
       '  throughout. Use it to find out WHERE traffic is, then go listen there properly.',
     warn: 'This holds the dongle for minutes at a time. Leak detection is off for all of it.',
+  },
+  hop: {
+    label: 'Hopping endpoints — my window only',
+    args: '-f 916.45M -s 1600k ' + ORION_PROTOCOLS + ' ' + ORION_META,
+    window: '915.650 - 917.250 MHz',
+    hears: 'protocols 223, 282 and 290 -- but only the ~6% of the band this window covers',
+    blurb: 'A cheap first look. 282/290 endpoints hop across all of 902-928, so this window sees\n' +
+           '  roughly one slice in sixteen: SILENCE HERE PROVES NOTHING. A decode, on the other\n' +
+           '  hand, is real and immediately interesting -- run "hopsweep" next to find where it\n' +
+           '  actually lives.',
+    tally: true,
+  },
+  hopsweep: {
+    label: 'Hopping endpoints — hop the whole band',
+    args: SWEEP_HOPS.map((f) => '-f ' + f + 'M').join(' ') + ' -s ' + SWEEP_RATE_KHZ + 'k ' +
+      ORION_PROTOCOLS + ' ' + ORION_META + ' -H ' + SWEEP_DWELL_S,
+    window: SWEEP_RATE_KHZ / 1000 + ' MHz at a time, ' + SWEEP_HOPS.length + ' positions covering ' +
+      SWEEP_LOW_MHZ + ' - ' + SWEEP_HIGH_MHZ + ' MHz',
+    hears: 'protocols 223, 282 and 290 anywhere in the ISM band -- one slice at a time',
+    hops: SWEEP_HOPS,
+    blurb: 'THE actual test for 282/290. You are still listening to any given slice ' +
+      (1 / SWEEP_HOPS.length * 100).toFixed(0) + '% of the\n' +
+      '  time, so run several full passes (~' + Math.round(SWEEP_HOPS.length * SWEEP_DWELL_S / 60) +
+      ' min each) before calling it empty. Ctrl-C prints a\n' +
+      '  summary of every endpoint heard, by protocol and by frequency.',
+    warn: 'This holds the dongle for as long as you leave it running. Leak detection is off throughout.',
+    tally: true,
   },
   signal: {
     label: 'Signal figures (antenna work)',
@@ -225,6 +278,110 @@ function make_formatter() {
   };
 }
 
+
+/**
+ * The endpoint scoreboard.
+ *
+ * The question these modes exist to answer is not "what does one packet look like" but "IS anything
+ * on 282/290 within reach". That is a question about the WHOLE run, so it needs a summary rather
+ * than a scrolling log -- twenty minutes of hopping produces far more output than anyone reads, and
+ * the one interesting line would go by at 3am on a Tuesday.
+ *
+ * Live rows still print, because watching nothing happen for four minutes with no feedback is
+ * indistinguishable from a crashed process. But the deliverable is what prints on Ctrl-C.
+ *
+ * Keyed on (protocol, id): the same endpoint decoded by two protocols is genuinely two findings,
+ * and collapsing them would hide exactly the thing being tested.
+ */
+function make_tally() {
+  const seen = new Map();
+  let n = 0;
+  const started = Date.now();
+
+  console.log(c(DIM, '   #  time      proto  meter        freq MHz    snr   model'));
+  console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
+
+  function on_line(line) {
+    if (line.charAt(0) !== '{') { if (line) console.log(c(DIM, '  ' + line)); return; }
+    let m;
+    try { m = JSON.parse(line); } catch (e) { return; }
+
+    n += 1;
+    const proto = m.protocol !== undefined && m.protocol !== null ? String(m.protocol) : '?';
+    const id = m.id !== undefined ? String(m.id) : (m.Id !== undefined ? String(m.Id) : '?');
+    const freq = pick(m, ['freq', 'freq1', 'frequency']);
+    const snr = pick(m, ['snr']);
+    const model = typeof m.model === 'string' ? m.model : '';
+    const t = String(m.time || '').slice(11, 19) || '--:--:--';
+
+    const key = proto + '|' + id;
+    let e = seen.get(key);
+    if (!e) {
+      e = { proto, id, model, count: 0, lo: null, hi: null, snr_sum: 0, snr_n: 0, first: t, last: t };
+      seen.set(key, e);
+      // A brand-new endpoint is THE event. Say so at the moment it happens rather than only in the
+      // summary, because that is when you might still be standing next to the antenna.
+      console.log(c(GREEN + BOLD, '  ** new endpoint: protocol ' + proto + ', id ' + id +
+        (model ? ' (' + model + ')' : '') + ' **'));
+    }
+    e.count += 1;
+    e.last = t;
+    if (model && !e.model) e.model = model;
+    if (freq !== null) {
+      if (e.lo === null || freq < e.lo) e.lo = freq;
+      if (e.hi === null || freq > e.hi) e.hi = freq;
+    }
+    if (snr !== null) { e.snr_sum += snr; e.snr_n += 1; }
+
+    console.log(
+      '  ' + String(n).padStart(3) + '  ' + t + '  ' + proto.padStart(5) + '  ' + id.padStart(10) + '  ' +
+      (freq === null ? c(DIM, '      --') : freq.toFixed(3).padStart(8)) + '  ' +
+      (snr === null ? c(DIM, '   --') : snr.toFixed(1).padStart(5)) + '   ' + c(DIM, model)
+    );
+  }
+
+  function summary() {
+    const mins = Math.max(1, Math.round((Date.now() - started) / 60000));
+    console.log('');
+    console.log(c(BOLD + CYAN, '  Endpoints heard in ' + mins + ' min'));
+    console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
+    if (!seen.size) {
+      console.log(c(YELLOW, '  Nothing decoded at all.'));
+      console.log(c(DIM, '  Not even protocol 223, which normally arrives every ~4s -- so this is more'));
+      console.log(c(DIM, '  likely the dongle, the antenna or a build without the Orion decoders than'));
+      console.log(c(DIM, '  a real absence. Try:  node ' + path.relative(process.cwd(), __filename) + ' check'));
+      return;
+    }
+    console.log(c(DIM, '  proto  meter        packets   freq range (MHz)     mean snr'));
+    const rows = [...seen.values()].sort((a, b) => (a.proto === b.proto ? b.count - a.count : a.proto.localeCompare(b.proto)));
+    rows.forEach((e) => {
+      const range = e.lo === null ? '--'
+        : (e.lo === e.hi ? e.lo.toFixed(3) : e.lo.toFixed(3) + ' - ' + e.hi.toFixed(3));
+      console.log(
+        '  ' + e.proto.padStart(5) + '  ' + e.id.padStart(10) + '  ' + String(e.count).padStart(7) + '   ' +
+        range.padEnd(19) + '  ' + (e.snr_n ? (e.snr_sum / e.snr_n).toFixed(1) : '--').padStart(6)
+      );
+    });
+
+    // The verdict, stated plainly, with the caveat attached to it rather than left implicit.
+    const hopping = rows.filter((e) => e.proto === '282' || e.proto === '290');
+    console.log('');
+    if (hopping.length) {
+      console.log(c(GREEN + BOLD, '  ' + hopping.length + ' endpoint(s) on protocol 282/290 are within reach of this antenna.'));
+      console.log(c(DIM, '  A frequency RANGE above (rather than one value) is the hopping confirming itself.'));
+      console.log(c(DIM, '  Coverage will still be partial on a fixed collector window -- see the note below.'));
+    } else {
+      console.log(c(YELLOW, '  Nothing on protocol 282 or 290.'));
+      console.log(c(DIM, '  This is weak evidence, not a conclusion. A hopping endpoint is only inside any'));
+      console.log(c(DIM, '  one 2.4 MHz slice a fraction of the time, so a short run misses it easily.'));
+      console.log(c(DIM, '  Run hopsweep for several full passes before deciding it is not there.'));
+    }
+    console.log('');
+  }
+
+  return { on_line, summary };
+}
+
 // -----------------------------------------------------------------------------------------------
 
 function print_header(key, mode, cmd) {
@@ -262,7 +419,23 @@ function run_check(cmd) {
   const hits = text.split(/\r?\n/).filter((l) => /orion/i.test(l));
   if (hits.length) {
     hits.forEach((l) => console.log(c(GREEN, '  ✓ ' + l.trim())));
-    console.log(c(DIM, '\n  Protocol 223 is present. -R 223 will work.'));
+    // Which NUMBERS are present, not merely "something Orion-ish". 223 is what the collector reads;
+    // 282 and 290 are the hopping variants the hop/hopsweep modes test for, and a build that lacks
+    // them would report a clean, confident, meaningless "nothing found".
+    const nums = new Set();
+    hits.forEach(function (l) { const m = l.match(/\[\s*(\d+)\s*\]/); if (m) nums.add(m[1]); });
+    console.log('');
+    ['223', '282', '290'].forEach(function (p) {
+      const note = p === '223' ? 'the collector reads this one'
+        : 'frequency-hopping variant — hop / hopsweep need it';
+      console.log(nums.has(p)
+        ? c(GREEN, '  ✓ ' + p) + c(DIM, '  ' + note)
+        : c(YELLOW, '  – ' + p) + c(DIM, '  not in this build — ' + note));
+    });
+    if (!nums.has('282') && !nums.has('290')) {
+      console.log(c(DIM, '\n  Without 282/290 the hop modes can only ever report 223, so an empty result'));
+      console.log(c(DIM, '  would say nothing about the hopping endpoints. Build rtl_433 from source.'));
+    }
     return 0;
   }
   console.log(c(RED, '  ✗ No Orion decoder in this build.'));
@@ -281,9 +454,9 @@ function main() {
   if (!mode) {
     console.log('\n  Usage: node ' + path.relative(process.cwd(), __filename) + ' <mode>\n');
     Object.keys(MODES).forEach((k) => {
-      console.log('    ' + c(BOLD, k.padEnd(8)) + MODES[k].label + c(DIM, '   ' + MODES[k].window));
+      console.log('    ' + c(BOLD, k.padEnd(10)) + MODES[k].label + c(DIM, '   ' + MODES[k].window));
     });
-    console.log('    ' + c(BOLD, 'check   ') + 'Is protocol 223 in this rtl_433 build (no dongle needed)');
+    console.log('    ' + c(BOLD, 'check     ') + 'Are the Orion decoders in this rtl_433 build (no dongle needed)');
     console.log('');
     process.exit(key ? 1 : 0);
   }
@@ -321,6 +494,7 @@ function main() {
   const args = rtl433.parse_args(mode.args);
   const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   const format = mode.format ? make_formatter() : null;
+  const tally = mode.tally ? make_tally() : null;
 
   child.on('error', function (err) {
     console.log(c(RED, '  Could not start ' + cmd + ': ' + err.message));
@@ -329,7 +503,9 @@ function main() {
 
   createInterface({ input: child.stdout }).on('line', function (line) {
     const t = String(line).trim();
-    if (format) format(t); else if (t) console.log('  ' + t);
+    if (tally) tally.on_line(t);
+    else if (format) format(t);
+    else if (t) console.log('  ' + t);
   });
 
   child.stderr.on('data', function (d) {
@@ -343,6 +519,9 @@ function main() {
 
   child.on('close', function (code) {
     console.log(c(DIM, '\n  rtl_433 exited (' + code + ').'));
+    // Summary BEFORE the collector restart line, so the answer you ran this for is the last thing
+    // on screen rather than buried above a pm2 message.
+    if (tally) { try { tally.summary(); } catch (e) { /* never swallow the restart */ } }
     give_back();
     process.exit(0);
   });
@@ -355,4 +534,5 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { MODES, pm2_state, hop_centres, SWEEP_LOW_MHZ, SWEEP_HIGH_MHZ, SWEEP_RATE_KHZ };
+module.exports = { MODES, pm2_state, hop_centres, make_tally,
+  SWEEP_LOW_MHZ, SWEEP_HIGH_MHZ, SWEEP_RATE_KHZ, ORION_PROTOCOLS };

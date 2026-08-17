@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
 
 const listen = require('../listen');
 const menu = require('../../../menu');
@@ -123,4 +124,40 @@ test('every doc the menu advertises actually exists', function () {
     .map((d) => d[0])
     .filter((rel) => !fs.existsSync(path.join(menu.REPO_ROOT, rel.replace(/\/$/, ''))));
   assert.deepEqual(missing, [], 'menu DOCS entries that do not exist on disk');
+});
+
+test('the hopping-endpoint modes enable 282 and 290, and say which fired', function () {
+  // The whole point is telling 282 from 290 from 223. Without -M protocol every decode is just a
+  // model string and the summary could not answer the question the mode exists for.
+  for (const key of ['hop', 'hopsweep']) {
+    const m = listen.MODES[key];
+    assert.ok(m, key + ' must exist');
+    assert.match(m.args, /-R 223 -R 282 -R 290/, key + ' must enable all three decoders');
+    assert.match(m.args, /-M protocol/, key + ' must record WHICH protocol decoded each packet');
+    assert.match(m.args, /-M level/, key + ' still wants rssi/snr/freq');
+    assert.ok(m.tally, key + ' must print the endpoint summary');
+  }
+  // The fixed-window one really is the collector's window -- otherwise "my window only" is a lie.
+  assert.match(listen.MODES.hop.args, /-f 916\.45M -s 1600k/);
+  // The sweep really is the same 13 positions as `sweep`, so the two are comparable.
+  listen.hop_centres().forEach(function (f) {
+    assert.ok(listen.MODES.hopsweep.args.indexOf('-f ' + f + 'M') !== -1, f + ' must be in the hop plan');
+  });
+});
+
+test('an empty hop result is reported as weak evidence, not as an answer', function () {
+  // A hopping endpoint is inside any one 2.4 MHz slice a small fraction of the time. "Nothing
+  // found" after four minutes is close to meaningless, and stating it as a conclusion is how you
+  // end up confidently wrong about hardware you never actually listened for.
+  const src = fs.readFileSync(require.resolve('../listen'), 'utf8');
+  const i = src.indexOf('function make_tally');
+  assert.ok(i !== -1, 'the summary must exist');
+  const body = src.slice(i, src.indexOf('\n  return { on_line, summary };', i));
+  assert.match(body, /weak evidence, not a conclusion/);
+  assert.match(body, /several full passes/);
+  // Keyed on (protocol, id): one endpoint decoded by two protocols is two findings, and collapsing
+  // them would hide exactly what is being tested.
+  assert.match(body, /const key = proto \+ '\|' \+ id;/);
+  // Nothing at all -- not even 223 -- points at the radio, not at the band.
+  assert.match(body, /Not even protocol 223/);
 });
