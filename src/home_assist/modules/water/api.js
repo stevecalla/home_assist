@@ -73,14 +73,16 @@ function mount(app) {
     const meter_id = sel.meter_id;
     const is_owned = meter_id === cfg.meter_id;
 
-    const [state, hours, recent] = await Promise.all([
+    const [state, hours, recent, registry] = await Promise.all([
       readings.get_state(meter_id),
       readings.hour_map(meter_id, 72),
       // Enough rows to see back through a long run. A leak at 1 gal/min for 8 hours is 480 rows;
       // recent_readings caps at 500, and current_run reports `truncated` if it hits the end rather
       // than pretending it knows when the run began.
       readings.recent_readings(meter_id, 500),
+      meters.list(),
     ]);
+    const row = registry.find(function (m) { return Number(m.meter_id) === Number(meter_id); }) || null;
 
     // MySQL DATETIMEs come back as strings (dateStrings) and are stored in UTC — append Z so the
     // browser gets an unambiguous instant rather than a local-time guess.
@@ -113,7 +115,10 @@ function mount(app) {
       own_meter_id: cfg.meter_id,
       selection: sel.selection,
       is_owned: is_owned,
-      meter_name: is_owned ? (cfg.meter_name || null) : null,
+      // The name of the meter IN VIEW, from the registry -- not a single global setting that could
+      // only ever describe one of them. Null when unnamed; the UI shows the bare id, which is a
+      // perfectly good name and is what you search the packet table by.
+      meter_name: row ? row.meter_name : null,
       // What is actually on the air. Read from the SAME resolved rtl_433 arguments the collector
       // launches with, not retyped here — if someone retunes the radio in .env, this line follows.
       // Worth showing because "no readings" has two very different causes, and one of them is
@@ -186,7 +191,7 @@ function mount(app) {
         packets_retention_days: cfg.packets_retention_days,
         alerts_retention_days: cfg.alerts_retention_days,
       },
-      meter: { id: cfg.meter_id, name: cfg.meter_name, gallons_per_unit: cfg.gallons_per_unit },
+      meter: { id: cfg.meter_id, gallons_per_unit: cfg.gallons_per_unit },
       // The Real time tab's vocabulary, served from the SAME constants the badge and the gap
       // detector use — so the Reference page cannot drift from the thing it documents.
       signal_quality: rules.SIGNAL_QUALITY,

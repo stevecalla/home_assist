@@ -85,15 +85,68 @@ test('every stat on the card follows the selected meter, not "is it mine"', func
   assert.match(ui, /packets=\{rtFocus\}/, 'the chart draws the selected meter too');
 });
 
-test('the picker shows meter ids, not a synonym for the badge beside them', function () {
-  const ui = fs.readFileSync(
-    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
-  assert.ok(ui.indexOf('My meter') === -1, '"My meter" next to a "mine" badge says it twice');
+test('the id is always visible; a name sits beside it, never instead of it', function () {
+  // The id is what you search the packet table by, so it must survive being named. What is banned
+  // is a GENERATED name -- "My meter" next to a "mine" badge said the same thing twice and pushed
+  // the number out of view. A name you typed is different, and is now shown.
   const pick = fs.readFileSync(
     require.resolve('../../../web/src/modules/water/MeterPicker.jsx'), 'utf8');
-  assert.ok(pick.indexOf('My meter') === -1, '"My meter" next to a "mine" badge says it twice');
+  assert.ok(pick.indexOf('My meter') === -1, 'no generated name');
+  assert.match(pick, /named && named\.meter_name \? named\.meter_name \+ ' \\u00b7 ' \+ sel : String\(sel\)/,
+    'named -> "name · id"; unnamed -> the bare id');
+
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
+  assert.ok(ui.indexOf('My meter') === -1);
+  assert.match(ui, /ID \{status\.meter_id\}/, 'the header keeps the id whatever the name is');
+
   const store = fs.readFileSync(require.resolve('../store/meters'), 'utf8');
-  assert.ok(store.indexOf("'My meter'") === -1, 'the registry must not auto-label the owned meter');
+  assert.ok(store.indexOf("'My meter'") === -1, 'the registry must not auto-name the owned meter');
+});
+
+test('there is exactly ONE name for a meter, and it lives on the meter', function () {
+  // There used to be two: water_settings.meter_name (global, showed in the header) and
+  // water_meters.label (per meter, displayed nowhere). The same meter could carry two different
+  // names with nothing to say which won, and the one you could edit on the Meters page was the
+  // one nobody could see.
+  const settings = fs.readFileSync(require.resolve('../store/settings'), 'utf8');
+  const defs = settings.slice(settings.indexOf('const DEFS'), settings.indexOf('function '));
+  assert.ok(defs.indexOf('meter_name: {') === -1, 'the global name setting must be gone');
+
+  const schema = fs.readFileSync(require.resolve('../../../store/schema'), 'utf8');
+  assert.match(schema, /meter_name\s+VARCHAR\(120\)/, 'the name lives on water_meters');
+  // Renamed, not added-and-copied: the old column would otherwise linger as a second, stale answer.
+  assert.match(schema, /\['water_meters', 'label', 'meter_name'/);
+  assert.match(schema, /ALTER TABLE `' \+ table \+ '` CHANGE/);
+
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  assert.match(api, /meter_name: row \? row\.meter_name : null/,
+    'status must report the name of the meter IN VIEW, not one global name');
+  assert.ok(api.indexOf('cfg.meter_name') === -1, 'nothing may still read the retired setting');
+});
+
+test('a name you typed survives every reboot', function () {
+  // ensure_owned runs on every boot of both processes. It used to reset label = NULL, which would
+  // now silently wipe the name each restart.
+  const store = fs.readFileSync(require.resolve('../store/meters'), 'utf8');
+  const i = store.indexOf('async function ensure_owned');
+  const body = store.slice(i, store.indexOf('\n}', i));
+  assert.ok(body.indexOf('meter_name = NULL') === -1, 'the upsert must not clear the name');
+  assert.match(body, /ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1, notify = 1'/);
+});
+
+test('ownership badges and delivery pills are different vocabularies', function () {
+  // Green "mine" and green "✓ sent" were the same chip shape carrying unrelated meanings: one is
+  // "this is my meter", the other is "the email went out".
+  const css = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/water.css'), 'utf8');
+  assert.match(css, /\.w-own\.mine/);
+  assert.match(css, /\.w-own\.observed/);
+  assert.match(css, /\.w-own\.alerting/, 'an observed meter allowed to email you needs its own word');
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Meters.jsx'), 'utf8');
+  assert.match(ui, /w-own mine/);
+  assert.match(ui, /m\.notify \? 'alerting' : 'observed'/);
 });
 
 test('the whole page follows the selection, not just the packet table', function () {

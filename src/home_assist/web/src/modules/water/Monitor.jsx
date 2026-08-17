@@ -368,7 +368,9 @@ export default function Monitor() {
   const cardOdo = liveOdo;
   const cardLastAt = lastPacketAt;
   const cardSecs = lastPacketSecs;
-  const cardTitle = selId !== null ? selId + ' — live' : 'Meter — live';
+  const cardTitle = selId !== null
+    ? (status.meter_name ? status.meter_name + ' \u00b7 ' + selId : String(selId)) + ' — live'
+    : 'Meter — live';
 
   const exportHeaders = mode === 'long' ? lvHeaders : mode === 'realtime' ? rtHeaders : hbHeaders;
   const exportRows = mode === 'long' ? lvRows : mode === 'realtime' ? rtRows : hbRows;
@@ -384,7 +386,9 @@ export default function Monitor() {
         <div>
           <h2>Water monitor</h2>
           <p className="muted">
-            {status.meter_name ? status.meter_name + ' · ' : ''}ID {status.own_meter_id || status.meter_id} · {status.tz}
+            {/* The name of the meter IN VIEW, and its id. Both, always -- the name is what you
+                recognise and the id is what you search the packet table by. */}
+            {status.meter_name ? status.meter_name + ' · ' : ''}ID {status.meter_id} · {status.tz}
             {selId !== null
               ? <b className="w-viewing"> · viewing {selId}</b> : null}
           </p>

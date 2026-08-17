@@ -263,7 +263,7 @@ const TABLES = [
     ddl: `CREATE TABLE IF NOT EXISTS water_meters (
      meter_id         BIGINT UNSIGNED NOT NULL,
      purpose ${PURPOSE_COL}'${SHORT.water_meters}',
-     label            VARCHAR(64)     NULL COMMENT 'human name for the selector; NULL = show the id',
+     meter_name       VARCHAR(120)    NULL COMMENT 'What you call this meter. Free text, yours to set. The id stays visible everywhere beside it',
      model            VARCHAR(32)     NULL COMMENT 'as reported by the decoder, e.g. Badger-ORION',
      owned            TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1 = the meter leak rules and alerts run for',
      collect_readings TINYINT(1)      NOT NULL DEFAULT 0 COMMENT 'store readings/hourly for it, not just packets',
@@ -381,6 +381,32 @@ async function existing_columns(pool, table) {
   const set = new Set();
   rows.forEach(function (r) { set.add(String(r.c).toLowerCase()); });
   return set;
+}
+
+/**
+ * Columns that changed NAME, as [table, from, to, definition].
+ *
+ * Applied before add_missing_columns, and only when `from` exists and `to` does not -- so it runs
+ * exactly once, and a fresh database (where the CREATE already used the new name) skips it. A
+ * rename rather than add-and-copy because the old column would otherwise linger forever as a
+ * second, stale answer to the same question.
+ */
+const RENAMED_COLUMNS = [
+  // `label` said nothing about what it held. This is the meter's name, and it is now the ONLY one --
+  // water_settings.meter_name is gone, so a meter cannot have two different names any more.
+  ['water_meters', 'label', 'meter_name', "VARCHAR(120) NULL COMMENT 'What you call this meter. Free text, yours to set'"],
+];
+
+async function rename_columns(pool) {
+  const done = [];
+  for (const [table, from, to, def] of RENAMED_COLUMNS) {
+    const have = await existing_columns(pool, table);
+    if (!have.size) continue;                                   // table not there yet
+    if (!have.has(from.toLowerCase()) || have.has(to.toLowerCase())) continue;
+    await pool.query('ALTER TABLE `' + table + '` CHANGE `' + from + '` `' + to + '` ' + def);
+    done.push(table + '.' + from + ' -> ' + to);
+  }
+  return done;
 }
 
 async function add_missing_columns(pool) {
@@ -536,6 +562,8 @@ async function ensure_schema(db) {
   _ready = (async function () {
     const pool = await db.get_pool();
     for (const t of TABLES) await pool.query(t.ddl);
+    const renamed = await rename_columns(pool);
+    if (renamed.length) console.log('[schema] renamed column(s): ' + renamed.join(', '));
     const added = await add_missing_columns(pool);
     if (added.length) console.log('[schema] added column(s): ' + added.join(', '));
     const repurposed = await sync_purpose_column(pool);
@@ -552,4 +580,4 @@ async function ensure_schema(db) {
 // Test/CLI hook — forget the memoized promise (e.g. after switching databases).
 function _reset() { _ready = null; }
 
-module.exports = { ensure_schema, STATEMENTS, TABLES, ADDED_COLUMNS, _reset };
+module.exports = { ensure_schema, STATEMENTS, TABLES, ADDED_COLUMNS, RENAMED_COLUMNS, _reset };

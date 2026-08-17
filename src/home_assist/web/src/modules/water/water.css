@@ -924,3 +924,23 @@ th.w-grid-num { padding: 6px 8px; }
 @media (max-width: 700px) {
   .w-meter-grid { grid-template-columns: 1fr; }
 }
+
+/* Ownership badges. Deliberately NOT .w-pill — the Alerts page uses those for DELIVERY, and a green
+   "mine" next to a green "✓ sent" was the same chip carrying two unrelated meanings. Squared
+   corners and a border here, rounded and filled there: two vocabularies you can tell apart at a
+   glance. Word always present; colour never carries it alone. */
+.w-own {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+  border: 1px solid currentColor;
+}
+.w-own.mine      { color: var(--w-good); }
+.w-own.observed  { color: var(--w-axis); }
+/* An observed meter that is allowed to email you. The one surprising configuration in the app, so
+   it gets its own word rather than hiding inside "observed". */
+.w-own.alerting  { color: var(--w-serious); }
+
+.w-meter-name { font-size: 16px; font-weight: 700; }
+/* The name leads, the id follows in a lighter weight — present always, never replaced. */
+.w-meter-row .w-meter-name + .w-meter-id { font-weight: 500; color: var(--muted); }
+.w-pick-name { margin-right: 6px; }

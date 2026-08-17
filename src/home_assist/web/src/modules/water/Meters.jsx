@@ -15,7 +15,7 @@ import './water.css';
 // arriving in your inbox at 3am, which nobody would guess had been configured.
 
 function Row({ m, ownEmail, emailEnabled, onSaved }) {
-  const [label, setLabel] = useState(m.label || '');
+  const [name, setName] = useState(m.meter_name || '');
   const [notify, setNotify] = useState(!!m.notify);
   const [email, setEmail] = useState(m.notify_email || '');
   const [scale, setScale] = useState(String(m.gallons_per_unit));
@@ -26,13 +26,13 @@ function Row({ m, ownEmail, emailEnabled, onSaved }) {
   // overwrites a half-typed address is the kind of thing that makes people stop trusting a form.
   useEffect(() => {
     if (busy) return;
-    setLabel(m.label || '');
+    setName(m.meter_name || '');
     setNotify(!!m.notify);
     setEmail(m.notify_email || '');
     setScale(String(m.gallons_per_unit));
   }, [m.meter_id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const dirty = (m.label || '') !== label
+  const dirty = (m.meter_name || '') !== name
     || !!m.notify !== notify
     || (m.notify_email || '') !== email
     || String(m.gallons_per_unit) !== scale;
@@ -40,7 +40,7 @@ function Row({ m, ownEmail, emailEnabled, onSaved }) {
   async function save() {
     setBusy(true); setMsg(null);
     const r = await api.waterSaveMeter(m.meter_id, {
-      label, notify, notify_email: email, gallons_per_unit: Number(scale),
+      meter_name: name, notify, notify_email: email, gallons_per_unit: Number(scale),
     });
     setBusy(false);
     if (r.status === 200 && r.body.ok) { setMsg({ ok: true, text: 'Saved' }); onSaved(r.body.meters); }
@@ -69,8 +69,15 @@ function Row({ m, ownEmail, emailEnabled, onSaved }) {
   return (
     <div className={'w-meter-row' + (m.owned ? ' owned' : '')}>
       <div className="w-meter-head">
+        {m.meter_name ? <span className="w-meter-name">{m.meter_name}</span> : null}
         <span className="w-meter-id">{m.meter_id}</span>
-        {m.owned ? <span className="w-pill sent">mine</span> : <span className="w-pill watched">observed</span>}
+        {/* Ownership badges, NOT the delivery pills used on the Alerts page -- same shape there
+            meant green "mine" and green "sent" were the same chip saying different things. */}
+        {m.owned
+          ? <span className="w-own mine">mine</span>
+          : <span className={'w-own ' + (m.notify ? 'alerting' : 'observed')}>
+              {m.notify ? 'alerting' : 'observed'}
+            </span>}
         {m.model ? <span className="muted small">{m.model}</span> : null}
         <span className="muted small">
           {m.packets_seen.toLocaleString()} packets
@@ -80,10 +87,14 @@ function Row({ m, ownEmail, emailEnabled, onSaved }) {
 
       <div className="w-meter-grid">
         <label>
-          <span className="w-field-label">Label</span>
-          <input value={label} onChange={(e) => setLabel(e.target.value)}
+          <span className="w-field-label">Meter name</span>
+          <input value={name} onChange={(e) => setName(e.target.value)}
                  placeholder="(none — the id is the name)" />
-          <span className="w-field-help">Optional. Only worth setting if you have a name a person chose.</span>
+          <span className="w-field-help">
+            What you call it: “Front pit”, “Rental at 1214”. Shown beside the id in the picker and
+            the page header — never instead of it, because the id is what you search the packet
+            table by. Optional; blank is fine.
+          </span>
         </label>
 
         <label>
