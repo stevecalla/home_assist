@@ -82,7 +82,7 @@ async function record_heard(seen, owned_meter_id) {
  */
 async function list() {
   const rows = await db.query(
-    'SELECT m.meter_id, m.label, m.model, m.owned, m.collect_readings, m.gallons_per_unit, ' +
+    'SELECT m.meter_id, m.meter_name, m.model, m.owned, m.collect_readings, m.gallons_per_unit, ' +
     '       m.notify, m.notify_email, ' +
     '       m.first_heard_utc, m.first_heard_mtn, m.last_heard_utc, m.last_heard_mtn, m.packets_seen, ' +
     '       EXISTS(SELECT 1 FROM water_packets p WHERE p.meter_id = m.meter_id) AS has_packets, ' +
@@ -93,7 +93,7 @@ async function list() {
   return rows.map(function (r) {
     return {
       meter_id: Number(r.meter_id),
-      label: r.label || null,
+      meter_name: r.meter_name || null,
       model: r.model || null,
       owned: !!r.owned,
       collect_readings: !!r.collect_readings,
@@ -123,15 +123,16 @@ async function ensure_owned(meter_id) {
   const n = time.stamps(new Date());
   try {
     await db.query(
-      // No auto-label. "My meter" beside a "mine" badge said the same thing twice and pushed the
-      // id -- the thing you actually search the table by -- out of view. A label is for a name a
-      // human chose, not for a synonym of a flag.
+      // No auto-name. "My meter" beside a "mine" badge said the same thing twice and pushed the
+      // id -- the thing you actually search the table by -- out of view. The name field is for a
+      // name a human chose, not for a synonym of a flag.
       // notify = 1 here and nowhere else: YOUR meter is the one that may wake you, and that has to
       // be true from the first boot rather than something you remember to switch on. Neighbours
       // default to 0 from the column default and stay there unless deliberately changed.
-      'INSERT INTO water_meters (meter_id, owned, collect_readings, notify, label, created_at_mtn) ' +
+      'INSERT INTO water_meters (meter_id, owned, collect_readings, notify, meter_name, created_at_mtn) ' +
       'VALUES (?,1,1,1,?,?) ' +
-      'ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1, notify = 1, label = NULL',
+      // meter_name is NOT reset here -- a name you typed must survive every reboot.
+      'ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1, notify = 1',
       [id, null, n.local]
     );
   } catch (e) { /* best-effort */ }
@@ -155,8 +156,8 @@ async function update(meter_id, patch, owned_meter_id) {
   if (!id) return { ok: false, error: 'bad meter id' };
   const is_owned = Number(owned_meter_id) === id;
 
-  const label = patch.label === undefined || patch.label === null
-    ? null : String(patch.label).trim().slice(0, 120) || null;
+  const meter_name = patch.meter_name === undefined || patch.meter_name === null
+    ? null : String(patch.meter_name).trim().slice(0, 120) || null;
 
   const emails = mailer.parse_recipients(patch.notify_email);
   const bad = emails.filter(function (a) { return !mailer.valid_address(a); });
@@ -174,9 +175,9 @@ async function update(meter_id, patch, owned_meter_id) {
 
   try {
     await db.query(
-      'UPDATE water_meters SET label = ?, notify = ?, notify_email = ?, gallons_per_unit = ? ' +
+      'UPDATE water_meters SET meter_name = ?, notify = ?, notify_email = ?, gallons_per_unit = ? ' +
       'WHERE meter_id = ?',
-      [label, notify, notify_email, scale, id]
+      [meter_name, notify, notify_email, scale, id]
     );
     return { ok: true };
   } catch (e) {

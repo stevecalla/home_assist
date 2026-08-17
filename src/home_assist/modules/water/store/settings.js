@@ -17,12 +17,11 @@ const time = require('../../../time');
 
 // name -> { type, def, env, label, help, group, min, max }
 const DEFS = {
-  meter_name: {
-    type: 'string', def: 'Main house meter', group: 'Meter',
-    label: 'Meter name',
-    help: 'What to call this meter in the UI. The radio id is a number nobody remembers; a name is ' +
-      'what makes a second meter (irrigation, a rental) legible when one gets added.',
-  },
+  // meter_name USED TO LIVE HERE. It moved to water_meters.meter_name, per meter, and is edited on
+  // the Meters page. It could only ever name ONE meter, which stopped making sense the moment the
+  // app could show several -- and having a name here AND a name on the meter row meant the same
+  // meter could carry two different names with nothing to say which won.
+  // Any leftover water_settings row is ignored: DEFS is the whole vocabulary.
 
   meter_id: {
     type: 'int', def: 16642655, env: 'WATER_METER_ID', group: 'Meter',

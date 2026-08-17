@@ -32,9 +32,14 @@ export default function MeterPicker({ sel, setSel, ownId, allowAll = true }) {
     return () => { live = false; };
   }, []);
 
-  // The id IS the name. An auto-generated label that only repeated the "mine" badge beside it said
-  // the same thing twice and hid the number you actually search the table by.
-  const label = sel === 'mine' || sel === 'all' ? 'All meters' : String(sel);
+  // A name YOU typed is shown; a generated one never is. An auto-name that only restates the
+  // badge beside it says the same thing twice and hides the number. The id is always present
+  // either way -- it is what you search the packet table by, so a name sits beside it, never
+  // replaces it.
+  const named = (meterList || []).find((m) => String(m.meter_id) === String(sel));
+  const label = sel === 'mine' || sel === 'all'
+    ? 'All meters'
+    : (named && named.meter_name ? named.meter_name + ' \u00b7 ' + sel : String(sel));
 
   // The menu lives in a WRAPPER, not inside .w-filt. That pill has overflow:hidden to clip its own
   // rounded corners, which silently clipped the dropdown out of existence — it rendered, it was

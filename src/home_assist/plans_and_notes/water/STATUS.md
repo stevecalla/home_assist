@@ -487,7 +487,26 @@ like the app being broken rather than the app not having started:
 If the schema cannot be applied the server still starts and says so, rather than dying: a login page
 that loads and reports a database problem beats a process that will not boot.
 
-269 tests pass, 58/58 files parse, SPA builds clean.
+### Pass C.2 -- one name per meter, and badges that mean one thing
+
+There were **two** name fields and one of them was dead: `water_settings.meter_name` (global, drew
+the Monitor header) and `water_meters.label` (per meter, displayed nowhere). The same meter could
+carry two different names with nothing to say which won, and the editable one was invisible.
+
+| Change | Detail |
+|---|---|
+| **`water_meters.label` → `water_meters.meter_name`** | "label" says nothing about what it holds. A real `ALTER TABLE ... CHANGE`, applied once via a new `RENAMED_COLUMNS` list -- add-and-copy would leave the old column as a second, stale answer forever |
+| **`water_settings.meter_name` deleted** | It could only ever name ONE meter, which stopped making sense the moment the app could show several |
+| **`/api/water/status` returns the name of the meter IN VIEW** | Read from the registry row, not a global setting |
+| **`name · id` everywhere, id never dropped** | Picker pill, picker list, Monitor header, meter card title, Meters page. The id is what you search the packet table by, so a name sits beside it and never replaces it. Unnamed meters show the bare id, which is a perfectly good name |
+| **`ensure_owned` no longer clears the name** | It runs on every boot of both processes; the old `label = NULL` would now wipe a typed name on every restart |
+| **Ownership badges are their own vocabulary** (`.w-own`) | Green `mine` and green `✓ sent` used to be the same chip shape carrying unrelated meanings — one is "this is my meter", the other is "the email went out". Squared and outlined here, rounded and filled on Alerts |
+| **New `alerting` badge** | An observed meter with delivery switched on. The one surprising configuration in the app, so it gets its own word instead of hiding inside "observed" |
+
+What stays banned is a *generated* name. An auto-name that only restates the badge beside it says
+the same thing twice and hides the number.
+
+272 tests pass, 58/58 files parse, SPA builds clean.
 
 ## Open items
 
