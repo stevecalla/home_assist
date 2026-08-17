@@ -221,3 +221,17 @@ test('a hop mode drops decoders this build lacks instead of failing to start', f
   // apart from a dead antenna.
   assert.ok(listen.MODES.hop.optional_protocols.indexOf(223) === -1);
 });
+
+test('the antenna readout averages PER METER, against a held baseline', function () {
+  // One pooled mean across a 25 dB meter of your own and a 15 dB neighbour describes neither, and
+  // it moves when the MIX of packets changes rather than when the antenna does. Walking an aerial
+  // around a room while watching that number means chasing which transmitter happened to be louder
+  // in the last twenty packets.
+  const src = fs.readFileSync(require.resolve('../listen'), 'utf8');
+  const f = src.slice(src.indexOf('function make_formatter'), src.indexOf('function print_header'));
+  assert.match(f, /const per = new Map\(\)/, 'stats must be kept per meter id');
+  assert.match(f, /e\.base === null && snr_avg !== null/,
+    'a baseline must be held from the first block — only the delta answers "did that help?"');
+  assert.match(f, /n - last_report >= 20/,
+    'report on packet count, not a timer: a timer compares a busy 20s against a quiet one');
+});

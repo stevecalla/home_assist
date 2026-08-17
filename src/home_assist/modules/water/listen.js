@@ -278,6 +278,18 @@ function pick(o, names) { for (const n of names) { const v = num(o[n]); if (v !=
 function make_formatter() {
   let n = 0, rssi_sum = 0, rssi_n = 0, snr_sum = 0, snr_n = 0;
   let warned_no_level = false;
+  // PER METER, not one pooled average.
+  //
+  // A single mean across a 25 dB meter of your own and a 15 dB neighbour is a number that describes
+  // neither, and it MOVES when the mix of packets changes rather than when the antenna does. That
+  // is the opposite of what you need while walking an aerial around a room -- you would chase a
+  // number that only reflects which transmitter happened to be louder in the last twenty packets.
+  //
+  // The neighbour is the more useful reference of the two. It is distant, weak and fixed: you did
+  // not move it, so a change in ITS signal is a change you made. Your own meter is already strong
+  // enough that improvements there are invisible.
+  const per = new Map();
+  let last_report = 0;
 
   console.log(c(DIM, '   #  time      meter        rssi     snr    freq MHz   reading'));
   console.log(c(DIM, '  ─────────────────────────────────────────────────────────────────'));
@@ -297,6 +309,12 @@ function make_formatter() {
 
     if (rssi !== null) { rssi_sum += rssi; rssi_n += 1; }
     if (snr !== null) { snr_sum += snr; snr_n += 1; }
+
+    let e = per.get(id);
+    if (!e) { e = { n: 0, snr_sum: 0, snr_n: 0, rssi_sum: 0, rssi_n: 0, base: null }; per.set(id, e); }
+    e.n += 1;
+    if (snr !== null) { e.snr_sum += snr; e.snr_n += 1; }
+    if (rssi !== null) { e.rssi_sum += rssi; e.rssi_n += 1; }
 
     // The failure this catches: `-M freq` is NOT a valid rtl_433 option, and passing it makes
     // rtl_433 drop the whole metadata set rather than ignore it -- so rssi/snr/freq all arrive
@@ -320,11 +338,28 @@ function make_formatter() {
       (vol === null ? c(DIM, '--') : String(vol))
     );
 
-    if (n % 20 === 0 && (rssi_n || snr_n)) {
-      const parts = [];
-      if (rssi_n) parts.push('rssi ' + (rssi_sum / rssi_n).toFixed(1));
-      if (snr_n) parts.push('snr ' + (snr_sum / snr_n).toFixed(1) + ' dB');
-      console.log(c(CYAN, '  ── mean over ' + n + ' packets: ' + parts.join('  ·  ') + ' ──'));
+    // Report on a fixed packet count rather than a timer, so every block averages the same amount
+    // of evidence. A timer would compare a busy twenty seconds against a quiet one.
+    if (n - last_report >= 20) {
+      last_report = n;
+      console.log(c(CYAN, '  ── mean so far ──'));
+      [...per.entries()].sort(function (a, b) { return b[1].n - a[1].n; }).forEach(function (kv) {
+        const id = kv[0], e = kv[1];
+        const snr_avg = e.snr_n ? e.snr_sum / e.snr_n : null;
+        // The DELTA against the first reported block is the number that answers "did that help?".
+        // An absolute SNR tells you where you are; only the change tells you whether the last move
+        // was an improvement, and holding a baseline is what stops you re-deciding on every packet.
+        if (e.base === null && snr_avg !== null) e.base = snr_avg;
+        const d = snr_avg !== null && e.base !== null ? snr_avg - e.base : null;
+        const arrow = d === null || Math.abs(d) < 0.5 ? c(DIM, '   =   ')
+          : d > 0 ? c(GREEN, '  +' + d.toFixed(1) + ' ') : c(RED, '  ' + d.toFixed(1) + ' ');
+        console.log(
+          '     ' + id.padStart(10) + '  ' + String(e.n).padStart(4) + ' pkt   snr ' +
+          (snr_avg === null ? c(DIM, ' --') : snr_avg.toFixed(1).padStart(5)) + ' dB' + arrow +
+          c(DIM, 'rssi ' + (e.rssi_n ? (e.rssi_sum / e.rssi_n).toFixed(1) : '--'))
+        );
+      });
+      console.log(c(DIM, '     (+/- is against this meter\'s FIRST block — move the aerial, watch the weakest one)'));
     }
   };
 }
