@@ -37,11 +37,23 @@ to find the id was a hose test — run water, watch which decoded id's volume mo
 A neighbour has a newer frequency-hopping Orion, id `40462356`, model `Orion-Endpoint`. If a capture
 shows that id, it is not ours.
 
+> **CONFIRMED against rtl_433 master, 2026-08-16.** The numbers are right; the *build* was the
+> problem. `conf/rtl_433.example.conf` on master lists:
+>
+> - `[282]  Orion Endpoint from Badger Meter, GIF2014W-OSE, water meter, hopping from 904.4 MHz to 924.6 MHz`
+> - `[290]  Orion Endpoint from Badger Meter, GIF2020OCECNA, water meter, hopping from 904.4 MHz to 924.6 MHz`
+>
+> The Latitude runs **rtl_433 23.11 (2023-11-28)**, whose protocol list stops at `[250]` — so 282
+> and 290 do not exist there in any form, Orion or otherwise. Master reaches `[337]`. Building from
+> source is what unlocks these, and nothing else will.
+
 ### Decoder
 
 - **rtl_433**, protocol **223** — "Badger ORION water meter, 100kbps".
-- **Fixed 916.45 MHz.** The classic Orion does *not* frequency-hop. Protocols 282/290 are for the
-  newer hopping endpoints — using them here decodes nothing.
+- **Fixed 916.45 MHz.** The classic Orion does *not* frequency-hop. Protocols **282** (GIF2014W-OSE)
+  and **290** (GIF2020OCECNA) are the newer Orion *Endpoint* models, and they hop **904.4 - 924.6
+  MHz** — a 20.2 MHz span against our 1.6 MHz window, which is the whole reason `40462356` has never
+  appeared here. Neither is in the apt build; see the note above.
 - **rtlamr cannot decode this meter at all.** It handles Itron ERTs (which is what the neighbours'
   gas and electric meters are, and why they decode so easily), not Badger Orion.
 
