@@ -60,7 +60,14 @@ function check_overnight(hours, now, cfg, tz) {
     message: 'Water ran overnight: ' + total.toFixed(0) + ' gal between ' +
       cfg.overnight_start_hour + ':00–' + cfg.overnight_end_hour + ':00. ' +
       '(Threshold ' + cfg.overnight_threshold_gal + ' gal.)',
-    detail: { day, total, threshold: cfg.overnight_threshold_gal, hours_missing: missing, keys },
+    detail: { day, total, threshold: cfg.overnight_threshold_gal, hours_missing: missing, keys,
+      // The hour-by-hour numbers the total was computed from. Stored so the Alerts page can
+      // SHOW its work: "95 gal overnight" is a claim, and a claim you cannot check is one you
+      // either believe blindly or learn to ignore. null marks an hour with no reading, which
+      // is not the same as an hour with no water.
+      per_hour: keys.map(function (k) {
+        return { hour: k, gallons: Object.prototype.hasOwnProperty.call(hours, k) ? Number(hours[k]) : null };
+      }) },
   };
 }
 
@@ -85,7 +92,10 @@ function check_continuous(hours, now, cfg, tz) {
     cooldown_min: 12 * 60,
     message: 'Continuous flow: water every hour for ' + cfg.continuous_hours + 'h (' +
       total.toFixed(0) + ' gal). Nothing normal does that.',
-    detail: { total, hours: cfg.continuous_hours, min_per_hour: cfg.continuous_min_gal_per_hour, keys },
+    detail: { total, hours: cfg.continuous_hours, min_per_hour: cfg.continuous_min_gal_per_hour, keys,
+      per_hour: keys.map(function (k) {
+        return { hour: k, gallons: Object.prototype.hasOwnProperty.call(hours, k) ? Number(hours[k]) : null };
+      }) },
   };
 }
 

@@ -31,6 +31,94 @@ function delivery_of(a) {
   return { cls: 'failed', text: '✕ not sent' };
 }
 
+// The numbers behind the sentence.
+//
+// "Continuous flow: water every hour for 6h (43 gal). Nothing normal does that." is a conclusion.
+// Every figure it was computed from is already in water_alerts.detail and was simply never shown,
+// so the only way to check the claim was to go and query the hourly table yourself. An alert you
+// cannot check is one you either believe blindly or learn to ignore.
+//
+// Collapsed by default: the sentence is the message, this is the evidence you open when you want it.
+const DETAIL_LABEL = {
+  total: 'Total in the window',
+  threshold: 'Threshold that was crossed',
+  hours: 'Hours in a row',
+  min_per_hour: 'Counted as "flowing" at or above',
+  hours_missing: 'Hours with no reading',
+  day: 'Local day',
+  minutes: 'Minutes without a break',
+  gallons: 'Gallons in the run',
+  rate: 'Rate',
+  trigger: 'What tripped it',
+  alarm_min: 'Alarm after (minutes)',
+  alarm_gal: 'Alarm after (gallons)',
+  truncated: 'Run may have started earlier than shown',
+  quiet_minutes: 'Minutes of silence',
+  stale_minutes: 'Silence allowed before alerting',
+  never_decoded: 'Never decoded a packet',
+  running_minutes: 'Collector had been up (minutes)',
+};
+const DETAIL_UNIT = {
+  total: 'gal', threshold: 'gal', gallons: 'gal', min_per_hour: 'gal/h',
+  alarm_gal: 'gal', minutes: 'min', alarm_min: 'min',
+  quiet_minutes: 'min', stale_minutes: 'min', running_minutes: 'min', hours: 'h',
+};
+
+function fmt_val(k, v) {
+  if (v === true) return 'yes';
+  if (v === false) return 'no';
+  if (typeof v === 'number') {
+    const n = Number.isInteger(v) ? String(v) : v.toFixed(1);
+    return DETAIL_UNIT[k] ? n + ' ' + DETAIL_UNIT[k] : n;
+  }
+  return String(v);
+}
+
+function AlertDetail({ detail }) {
+  if (!detail || typeof detail !== 'object') return null;
+  const per_hour = Array.isArray(detail.per_hour) ? detail.per_hour : null;
+  // `keys` is the raw hour-key list per_hour supersedes; requested_by is noise on a test push.
+  const scalars = Object.keys(detail).filter((k) => {
+    if (k === 'per_hour' || k === 'keys') return false;
+    const v = detail[k];
+    return v !== null && v !== undefined && typeof v !== 'object';
+  });
+  if (!scalars.length && !per_hour) return null;
+
+  return (
+    <details className="w-alert-detail">
+      <summary>Show the numbers</summary>
+      {scalars.length ? (
+        <table className="w-table small">
+          <tbody>
+            {scalars.map((k) => (
+              <tr key={k}>
+                <td className="muted">{DETAIL_LABEL[k] || k.replace(/_/g, ' ')}</td>
+                <td className="num">{fmt_val(k, detail[k])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {per_hour ? (
+        <table className="w-table small" style={{ marginTop: 8 }}>
+          <thead><tr><th>Hour (local)</th><th style={{ textAlign: 'right' }}>Gallons</th></tr></thead>
+          <tbody>
+            {per_hour.map((h) => (
+              <tr key={h.hour}>
+                <td style={{ whiteSpace: 'nowrap' }}>{String(h.hour).replace('T', '  ')}:00</td>
+                {/* An em dash, never a 0. "No reading" and "no water" are opposite conclusions and
+                    this is the table where someone decides whether to go and look at the basement. */}
+                <td className="num">{h.gallons === null ? '—' : h.gallons.toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </details>
+  );
+}
+
 export default function Alerts() {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
@@ -117,6 +205,7 @@ export default function Alerts() {
                       {a.delivery_note && !a.delivered
                         ? <div className="muted small" style={{ marginTop: 3 }}>{a.delivery_note}</div>
                         : null}
+                      <AlertDetail detail={a.detail} />
                     </td>
                   </tr>
                 );

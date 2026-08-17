@@ -440,7 +440,18 @@ Only meters with `has_readings` get rules run over them. A meter with packets bu
 evaluates to a flat zero every hour, which the overnight rule correctly reads as "no water" -- true,
 but not worth the queries.
 
-258 tests pass, 58/58 files parse, SPA builds clean.
+### Pass B.3 -- one clock, labelled charts, and alerts that show their work
+
+| What | Why |
+|---|---|
+| **One derived `lastPacketAt`**, used by the banner, the clock chip, the "since last packet" counter and the live chart edge | Three numbers an inch apart disagreed by four seconds. `water_collector_state` is stamped the instant a packet is decoded; `water_packets` is written by a batched flush and then fetched by a *separate* poll, so the table always trails. Both honest, one visible contradiction |
+| When the packet table is on screen, **the newest row is the answer** | It is the thing you are looking at. A clock that disagrees with the row beneath it is worse than one that is two seconds conservative. Everything else falls back to state |
+| `rtFocus`, not `rtPackets` | On "all meters" the newest row can be a neighbour's, and letting that set the banner would claim YOUR meter had just been heard when it had not |
+| `PACKET_FLUSH_MS` 5000 → **2500** | Halves the residual skew. Still a batched INSERT -- a meter transmits every ~4s, so a flush carries 1-2 rows for a two-meter site |
+| Value labels on the **Diagnostics** reception chart | Packets/minute is a small integer you compare against ~14, so the exact number is the point |
+| **`per_hour` recorded on overnight and continuous alerts**, shown in a collapsed `<details>` | "Water ran overnight: 95 gal" is a *claim*. Every figure behind it was already computed and thrown away; now it is stored. An alert you cannot check is one you either believe blindly or learn to ignore. `null`, never `0`, for an hour with no reading |
+
+259 tests pass, 58/58 files parse, SPA builds clean.
 
 ## Open items
 
