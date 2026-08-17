@@ -139,10 +139,32 @@ test('the hopping-endpoint modes enable 282 and 290, and say which fired', funct
   }
   // The fixed-window one really is the collector's window -- otherwise "my window only" is a lie.
   assert.match(listen.MODES.hop.args, /-f 916\.45M -s 1600k/);
-  // The sweep really is the same 13 positions as `sweep`, so the two are comparable.
-  listen.hop_centres().forEach(function (f) {
+  // The sweep covers the range rtl_433 DOCUMENTS for these endpoints -- 904.4 to 924.6 MHz -- not
+  // the whole ISM band. Same dwell over a fifth less spectrum is more time on each slice that can
+  // actually contain one, and dwell is the only lever that matters when chasing a hopper.
+  assert.equal(listen.ORION_LOW_MHZ, 904.4);
+  assert.equal(listen.ORION_HIGH_MHZ, 924.6);
+  const hops = listen.orion_hops();
+  // Narrower SPAN, not fewer hops -- the 1600k window is smaller, so covering less spectrum
+  // correctly still takes more positions than covering more of it at the wrong rate.
+  const span = (hops[hops.length - 1] - hops[0]) + listen.ORION_RATE_KHZ / 1000;
+  const generic = listen.hop_centres();
+  const generic_span = (generic[generic.length - 1] - generic[0]) + 2.4;
+  assert.ok(span < generic_span, 'the Orion range is narrower than the whole ISM band');
+  hops.forEach(function (f) {
     assert.ok(listen.MODES.hopsweep.args.indexOf('-f ' + f + 'M') !== -1, f + ' must be in the hop plan');
   });
+  // rtl_433 prints "-s 1600k" beside BOTH 282 and 290. A decoder's timing comes from the sample
+  // rate, so the wrong rate can mean it never syncs -- zero decodes from a transmitter that is
+  // right there, reported as an absent one. This is the one parameter that must not be tuned for
+  // coverage.
+  assert.equal(listen.ORION_RATE_KHZ, 1600);
+  assert.match(listen.MODES.hopsweep.args, /-s 1600k/);
+  assert.ok(listen.MODES.hopsweep.args.indexOf('-s 2400k') === -1);
+  // The window edges must cover the documented range, or a hop has been cut off.
+  const half = listen.ORION_RATE_KHZ / 1000 / 2;
+  assert.ok(hops[0] - half <= listen.ORION_LOW_MHZ, 'bottom edge must reach 904.4');
+  assert.ok(hops[hops.length - 1] + half >= listen.ORION_HIGH_MHZ, 'top edge must reach 924.6');
 });
 
 test('an empty hop result is reported as weak evidence, not as an answer', function () {
@@ -160,4 +182,42 @@ test('an empty hop result is reported as weak evidence, not as an answer', funct
   assert.match(body, /const key = proto \+ '\|' \+ id;/);
   // Nothing at all -- not even 223 -- points at the radio, not at the band.
   assert.match(body, /Not even protocol 223/);
+});
+
+test('the decoder check reads the WHOLE protocol list, not just Orion lines', function () {
+  // The bug this replaces: it filtered `-R help` down to Orion-named lines and THEN looked for
+  // 282/290 among them. A protocol 282 that exists under any other name was therefore reported
+  // "not in this build" -- a confident answer to a question it had not asked.
+  //
+  // The list is the authority. 282/290 came from a field note, not from rtl_433, and a check whose
+  // conclusion depends on that note being right is not a check.
+  const src = fs.readFileSync(require.resolve('../listen'), 'utf8');
+  assert.match(src, /function protocol_table\(cmd\)/);
+  const t = src.slice(src.indexOf('function protocol_table'), src.indexOf('function present_protocols'));
+  // Every numbered line, whatever it is called. The `*` marks disabled-by-default and must not
+  // make a protocol invisible.
+  assert.ok(t.indexOf(']\\*?') !== -1, 'the parser must tolerate the * disabled-by-default marker');
+  assert.ok(t.indexOf('(\\d+)') !== -1, 'and capture the protocol number');
+
+  const chk = src.slice(src.indexOf('function run_check'), src.indexOf('\nfunction main'));
+  assert.match(chk, /by name/i, 'name first — it survives the numbers being wrong');
+  assert.match(chk, /list\.get\(String\(n\)\)/, 'and report WHAT each number actually is');
+  assert.match(chk, /not an Orion decoder/, 'a number that is something else is the useful finding');
+});
+
+test('a hop mode drops decoders this build lacks instead of failing to start', function () {
+  // rtl_433 EXITS on an unknown -R number. Shipping `-R 282 -R 290` to a build without them meant
+  // the mode did not degrade, it refused to run -- and the user sees a usage dump, not an answer.
+  const src = fs.readFileSync(require.resolve('../listen'), 'utf8');
+  assert.match(src, /if \(mode\.optional_protocols\)/);
+  assert.match(src, /arg_text = arg_text\.replace/, 'the missing -R must be removed from the command');
+  assert.match(src, /so an empty result says nothing about the hopping endpoints/,
+    'and the run must say why its result is not evidence');
+  for (const key of ['hop', 'hopsweep']) {
+    assert.deepEqual(listen.MODES[key].optional_protocols, [282, 290],
+      key + ' must declare which decoders are optional');
+  }
+  // 223 is NOT optional: without it the mode has no baseline and "nothing heard" cannot be told
+  // apart from a dead antenna.
+  assert.ok(listen.MODES.hop.optional_protocols.indexOf(223) === -1);
 });

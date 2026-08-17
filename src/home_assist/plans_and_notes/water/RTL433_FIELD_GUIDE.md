@@ -27,7 +27,7 @@ forget. Prefer them to typing `rtl_433` by hand.
 | Listen — neighbourhood + mine | `npm run water_listen_wide` | 914.800 – 917.200 | both, in one window |
 | Listen — hop the WHOLE band | `npm run water_listen_sweep` | 901.8 – 928.2, 2.4 at a time | anything in the ISM band, 8% of the time |
 | **Hopping endpoints — my window** | `npm run water_listen_hop` | 915.650 – 917.250 | protocols 223 + **282/290**, ~6% of the band |
-| **Hopping endpoints — whole band** | `npm run water_listen_hopsweep` | 901.8 – 928.2, 2.4 at a time | 223 + **282/290** anywhere, 8% of the time |
+| **Hopping endpoints — Orion range** | `npm run water_listen_hopsweep` | 904.3 – 925.5, **1.6** at a time | 223 + **282/290** across the documented hop range, 7% of the time |
 | Signal figures | `npm run water_listen_signal` | 915.650 – 917.250 | per-packet rssi/snr/freq + running mean |
 | Which Orion decoders? | `npm run water_rtl_check` | — | reports 223 / 282 / 290 separately, no dongle needed |
 
@@ -41,12 +41,43 @@ appeared in this app: the collector's window is 1.6 MHz of a 26 MHz band.
 Both modes add `-R 282 -R 290` and `-M protocol`. The protocol flag matters — without it every
 decode is just a model string and you cannot tell 282 from 290 from 223.
 
+> **Confirmed against rtl_433 master.** `conf/rtl_433.example.conf` lists both, verbatim:
+>
+> ```
+> [282]  Orion Endpoint from Badger Meter, GIF2014W-OSE,  water meter, hopping from 904.4 Mhz to 924.6Mhz
+> [290]  Orion Endpoint from Badger Meter, GIF2020OCECNA, water meter, hopping from 904.4 Mhz to 924.6Mhz
+> ```
+>
+> They are **not in rtl_433 23.11**, whose protocol list stops at `[250]`; master reaches `[337]`.
+> So on the apt build these modes can only ever report 223, and their silence is not evidence.
+> **Building rtl_433 from source is the only thing that changes this** — see UBUNTU_DEPLOY.md.
+> `water_rtl_check` reports your build's highest protocol number for exactly this reason.
+
+`hopsweep` covers **904.4 – 924.6 MHz at `-s 1600k`** — both taken from rtl_433's own protocol
+descriptions, and the sample rate is the one that matters most:
+
+> A decoder's bit timing is derived from the sample rate. Run a 100 kbps-class decoder at the wrong
+> rate and it may never sync — **zero decodes from a transmitter sitting right there**, reported as
+> an absent one. The first version of this mode used `-s 2400k` to cover more spectrum per hop,
+> which would have produced a confident and completely wrong "nothing found". Correct and slow beats
+> fast and deaf.
+
+1.6 MHz windows over 20.2 MHz means **15 hops, ~5 minutes a pass**. The last hop deliberately
+overshoots 924.6 so the top of the range is actually covered; stopping at the last centre inside the
+limit would leave ~0.5 MHz unlistened, and an endpoint that only transmits up there would be
+reported absent by a sweep that never pointed at it.
+
+`rtl_433` **exits** on an unknown `-R` number, so the hop modes check the protocol table first and
+drop any decoder this build lacks, printing a warning that the run's silence is therefore not
+evidence. 223 is never dropped: without it there is no baseline, and "heard nothing" cannot be told
+apart from a dead antenna.
+
 Read the two results **very differently**:
 
 | Mode | Coverage | What silence means |
 |---|---|---|
 | `hop` | one fixed 1.6 MHz slice | **Almost nothing.** A hopping endpoint is in this window a small fraction of the time. A *decode* here is the interesting result |
-| `hopsweep` | 13 positions × 20 s, ~4 min per pass | Still only ~8% of any one slice. Run **several full passes** before calling it empty |
+| `hopsweep` | 15 positions × 20 s, ~5 min per pass | Still only ~7% of any one slice. Run **several full passes** before calling it empty |
 
 Ctrl-C prints the scoreboard: every endpoint heard, keyed on **(protocol, id)** — the same endpoint
 decoded by two protocols is genuinely two findings — with packet count, frequency *range* and mean

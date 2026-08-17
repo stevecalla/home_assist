@@ -113,6 +113,54 @@ const ORION_PROTOCOLS = '-R 223 -R 282 -R 290';
 const ORION_META = '-F json -M level -M protocol';
 
 /**
+ * The Orion Endpoint hop range, from rtl_433's own protocol descriptions:
+ *
+ *   [282]  Orion Endpoint from Badger Meter, GIF2014W-OSE,  hopping from 904.4 MHz to 924.6 MHz
+ *   [290]  Orion Endpoint from Badger Meter, GIF2020OCECNA, hopping from 904.4 MHz to 924.6 MHz
+ *
+ * 20.2 MHz, not the full 26 MHz ISM band -- so the generic `sweep` plan wastes about a fifth of its
+ * dwell listening where these endpoints never transmit. Same total time over a narrower span means
+ * more time on each slice that can actually contain one, which is the only lever that matters when
+ * you are trying to catch a hopper.
+ */
+const ORION_LOW_MHZ = 904.4;
+const ORION_HIGH_MHZ = 924.6;
+
+/**
+ * 1600k, NOT the 2400k the generic sweep uses.
+ *
+ * rtl_433 prints a suggested sample rate beside each protocol, and for both of these it is
+ * `-s 1600k`. That is not a hint about bandwidth -- the decoder's timing is derived from the sample
+ * rate, so running a 100kbps-class decoder at the wrong rate can mean it never syncs and you get
+ * ZERO decodes from a transmitter that is right there. The first version of this mode used 2400k
+ * to cover more spectrum per hop, which would have produced a confident, wrong "nothing found".
+ *
+ * The cost is a narrower window (1.6 MHz instead of 2.4) and therefore more hops. Correct and slow
+ * beats fast and deaf.
+ */
+const ORION_RATE_KHZ = 1600;
+const ORION_STEP_MHZ = 1.4;             // 1.6 MHz window, 0.2 MHz overlap at the seams
+
+/**
+ * Centres that COVER the range, rather than centres that merely start inside it.
+ *
+ * The loop exits once the window's top edge has passed ORION_HIGH_MHZ, so the last hop always
+ * overshoots slightly. Stopping at the last centre below the limit instead would leave the top
+ * ~0.5 MHz unlistened -- and an endpoint that only ever transmits up there would be reported as
+ * absent by a sweep that never pointed at it.
+ */
+function orion_hops() {
+  const half = ORION_RATE_KHZ / 1000 / 2;
+  const out = [];
+  for (let f = ORION_LOW_MHZ + ORION_STEP_MHZ / 2; ; f += ORION_STEP_MHZ) {
+    out.push(Number(f.toFixed(3)));
+    if (f + half >= ORION_HIGH_MHZ) break;
+  }
+  return out;
+}
+const ORION_HOPS = orion_hops();
+
+/**
  * The listening positions.
  *
  * `window` is not decoration. The sample rate IS the bandwidth: `-f X -s R` hears X +/- R/2 and
@@ -165,6 +213,7 @@ const MODES = {
     args: '-f 916.45M -s 1600k ' + ORION_PROTOCOLS + ' ' + ORION_META,
     window: '915.650 - 917.250 MHz',
     hears: 'protocols 223, 282 and 290 -- but only the ~6% of the band this window covers',
+    optional_protocols: [282, 290],
     blurb: 'A cheap first look. 282/290 endpoints hop across all of 902-928, so this window sees\n' +
            '  roughly one slice in sixteen: SILENCE HERE PROVES NOTHING. A decode, on the other\n' +
            '  hand, is real and immediately interesting -- run "hopsweep" next to find where it\n' +
@@ -173,17 +222,19 @@ const MODES = {
   },
   hopsweep: {
     label: 'Hopping endpoints — hop the whole band',
-    args: SWEEP_HOPS.map((f) => '-f ' + f + 'M').join(' ') + ' -s ' + SWEEP_RATE_KHZ + 'k ' +
+    args: ORION_HOPS.map((f) => '-f ' + f + 'M').join(' ') + ' -s ' + ORION_RATE_KHZ + 'k ' +
       ORION_PROTOCOLS + ' ' + ORION_META + ' -H ' + SWEEP_DWELL_S,
-    window: SWEEP_RATE_KHZ / 1000 + ' MHz at a time, ' + SWEEP_HOPS.length + ' positions covering ' +
-      SWEEP_LOW_MHZ + ' - ' + SWEEP_HIGH_MHZ + ' MHz',
-    hears: 'protocols 223, 282 and 290 anywhere in the ISM band -- one slice at a time',
-    hops: SWEEP_HOPS,
-    blurb: 'THE actual test for 282/290. You are still listening to any given slice ' +
-      (1 / SWEEP_HOPS.length * 100).toFixed(0) + '% of the\n' +
-      '  time, so run several full passes (~' + Math.round(SWEEP_HOPS.length * SWEEP_DWELL_S / 60) +
-      ' min each) before calling it empty. Ctrl-C prints a\n' +
-      '  summary of every endpoint heard, by protocol and by frequency.',
+    window: ORION_RATE_KHZ / 1000 + ' MHz at a time, ' + ORION_HOPS.length + ' positions covering ' +
+      ORION_LOW_MHZ + ' - ' + ORION_HIGH_MHZ + ' MHz',
+    hears: 'protocols 223, 282 and 290 across the Orion Endpoint hop range -- one slice at a time',
+    optional_protocols: [282, 290],
+    hops: ORION_HOPS,
+    blurb: 'THE actual test for 282/290, over the 904.4-924.6 MHz range and at the 1600k sample\n' +
+      '  rate rtl_433 documents for these endpoints. The rate matters: a decoder run at the\n' +
+      '  wrong rate may never sync, which looks exactly like an absent transmitter.\n' +
+      '  You still hear any one slice ' + (1 / ORION_HOPS.length * 100).toFixed(0) + '% of the time, so run SEVERAL full passes\n' +
+      '  (~' + Math.round(ORION_HOPS.length * SWEEP_DWELL_S / 60) + ' min each). One minute proves nothing. Ctrl-C prints every\n' +
+      '  endpoint heard, by protocol and by frequency.',
     warn: 'This holds the dongle for as long as you leave it running. Leak detection is off throughout.',
     tally: true,
   },
@@ -407,41 +458,90 @@ function print_header(key, mode, cmd) {
   console.log('');
 }
 
-function run_check(cmd) {
-  console.log('\n  ' + c(BOLD, 'Is the Badger Orion decoder in this build?') + '\n');
+/**
+ * Read the FULL protocol table out of `rtl_433 -R help`.
+ *
+ * Returns Map(number -> name). Lines look like "    [223]  Badger ORION water meter, 100kbps",
+ * sometimes with a `*` after the bracket marking "disabled by default".
+ */
+function protocol_table(cmd) {
   const r = spawnSync(cmd, ['-R', 'help'], { encoding: 'utf8', windowsHide: true });
+  if (r.error) return { error: r.error.message, list: new Map() };
   const text = String(r.stdout || '') + String(r.stderr || '');
-  if (r.error) {
-    console.log(c(RED, '  Could not run ' + cmd + ': ' + r.error.message));
+  const list = new Map();
+  text.split(/\r?\n/).forEach(function (l) {
+    const m = l.match(/^\s*\[\s*(\d+)\s*\]\*?\s+(.*)$/);
+    if (m) list.set(m[1], m[2].trim());
+  });
+  return { error: null, list };
+}
+
+/**
+ * Which of `wanted` this build actually has. Used to filter -R before launching, because rtl_433
+ * EXITS on an unknown protocol number -- so a mode asking for a decoder that is not compiled in
+ * does not degrade, it fails to start at all.
+ */
+function present_protocols(list, wanted) {
+  return wanted.filter(function (n) { return list.has(String(n)); });
+}
+
+function run_check(cmd) {
+  console.log('\n  ' + c(BOLD, 'Which decoders are in this rtl_433 build?') + '\n');
+  const { error, list } = protocol_table(cmd);
+  if (error) {
+    console.log(c(RED, '  Could not run ' + cmd + ': ' + error));
     console.log(c(DIM, '  Set WATER_RTL433_CMD (or _LINUX / _WINDOWS) in .env.'));
     return 1;
   }
-  const hits = text.split(/\r?\n/).filter((l) => /orion/i.test(l));
-  if (hits.length) {
-    hits.forEach((l) => console.log(c(GREEN, '  ✓ ' + l.trim())));
-    // Which NUMBERS are present, not merely "something Orion-ish". 223 is what the collector reads;
-    // 282 and 290 are the hopping variants the hop/hopsweep modes test for, and a build that lacks
-    // them would report a clean, confident, meaningless "nothing found".
-    const nums = new Set();
-    hits.forEach(function (l) { const m = l.match(/\[\s*(\d+)\s*\]/); if (m) nums.add(m[1]); });
-    console.log('');
-    ['223', '282', '290'].forEach(function (p) {
-      const note = p === '223' ? 'the collector reads this one'
-        : 'frequency-hopping variant — hop / hopsweep need it';
-      console.log(nums.has(p)
-        ? c(GREEN, '  ✓ ' + p) + c(DIM, '  ' + note)
-        : c(YELLOW, '  – ' + p) + c(DIM, '  not in this build — ' + note));
-    });
-    if (!nums.has('282') && !nums.has('290')) {
-      console.log(c(DIM, '\n  Without 282/290 the hop modes can only ever report 223, so an empty result'));
-      console.log(c(DIM, '  would say nothing about the hopping endpoints. Build rtl_433 from source.'));
-    }
-    return 0;
+  if (!list.size) {
+    console.log(c(RED, '  Could not parse any protocols out of -R help.'));
+    return 1;
   }
-  console.log(c(RED, '  ✗ No Orion decoder in this build.'));
-  console.log(c(DIM, '  The apt package is often too old. Build rtl_433 from source --'));
-  console.log(c(DIM, '  see src/home_assist/plans_and_notes/water/UBUNTU_DEPLOY.md'));
-  return 1;
+  console.log(c(DIM, '  ' + list.size + ' protocols in this build.\n'));
+
+  // BY NAME first. This is the part that survives being wrong about the numbers -- and the earlier
+  // version of this check was: it filtered to Orion-named lines and THEN looked for 282/290 in
+  // them, so a protocol 282 that exists under any other name was reported "not in this build".
+  // The list is the authority; a number written down in a note is not.
+  const orion = [...list.entries()].filter(function (e) { return /orion|badger/i.test(e[1]); });
+  console.log('  ' + c(BOLD, 'Orion / Badger decoders, by name'));
+  if (orion.length) {
+    orion.forEach(function (e) { console.log(c(GREEN, '    ✓ [' + e[0] + ']  ' + e[1])); });
+  } else {
+    console.log(c(RED, '    ✗ none — the apt build is often too old.'));
+    console.log(c(DIM, '    Build rtl_433 from source; see plans_and_notes/water/UBUNTU_DEPLOY.md'));
+  }
+
+  // BY NUMBER second, and printing WHAT each number actually is. If 282/290 turn out to be
+  // something unrelated here, that is the useful finding, not a missing feature.
+  console.log('\n  ' + c(BOLD, 'The numbers hop / hopsweep ask for'));
+  [223, 282, 290].forEach(function (n) {
+    const name = list.get(String(n));
+    if (!name) { console.log(c(YELLOW, '    – ' + n) + c(DIM, '   not in this build')); return; }
+    const is_orion = /orion|badger/i.test(name);
+    console.log((is_orion ? c(GREEN, '    ✓ ' + n) : c(YELLOW, '    ? ' + n)) + '   ' + name +
+      (is_orion ? '' : c(DIM, '   <- not an Orion decoder')));
+  });
+
+  const have = present_protocols(list, [282, 290]);
+  console.log('');
+  if (have.length) {
+    console.log(c(GREEN, '  hop / hopsweep will run with ' + have.join(' and ') + ' enabled.'));
+  } else {
+    console.log(c(YELLOW, '  Neither 282 nor 290 exists in this build, so hop / hopsweep can only'));
+    console.log(c(YELLOW, '  report 223 and an empty result would prove nothing.'));
+    console.log('');
+    // Not a guess. These two lines are verbatim from rtl_433's own conf/rtl_433.example.conf on
+    // master, which is what makes "your build is too old" a diagnosis rather than a hope.
+    console.log(c(DIM, '  On rtl_433 master these exist and are exactly what you want:'));
+    console.log(c(DIM, '    [282]  Orion Endpoint from Badger Meter, GIF2014W-OSE,  hopping 904.4 - 924.6 MHz'));
+    console.log(c(DIM, '    [290]  Orion Endpoint from Badger Meter, GIF2020OCECNA, hopping 904.4 - 924.6 MHz'));
+    const highest = Math.max.apply(null, [...list.keys()].map(Number));
+    console.log(c(DIM, '\n  This build stops at [' + highest + ']; master reaches [337]. Nothing about this'));
+    console.log(c(DIM, '  is fixable from the command line -- build rtl_433 from source:'));
+    console.log(c(DIM, '    plans_and_notes/water/UBUNTU_DEPLOY.md'));
+  }
+  return 0;
 }
 
 function main() {
@@ -491,7 +591,28 @@ function main() {
       : c(RED, 'FAILED — run: npm run pm2_start_water_collector'));
   }
 
-  const args = rtl433.parse_args(mode.args);
+  let arg_text = mode.args;
+
+  // rtl_433 EXITS on an unknown -R number, so a mode asking for a decoder this build does not have
+  // fails to start rather than degrading. Drop the missing ones and say so, so the run still
+  // produces its 223 baseline instead of a usage error nobody reads.
+  if (mode.optional_protocols) {
+    const { list } = protocol_table(cmd);
+    if (list.size) {
+      const missing = mode.optional_protocols.filter(function (n) { return !list.has(String(n)); });
+      if (missing.length) {
+        missing.forEach(function (n) {
+          arg_text = arg_text.replace(new RegExp('\\s-R ' + n + '(?=\\s|$)'), '');
+        });
+        console.log(c(YELLOW, '  Protocol ' + missing.join(' and ') + ' is not in this rtl_433 build.'));
+        console.log(c(YELLOW, '  Dropped from the command — this run can only report the decoders that ARE here,'));
+        console.log(c(YELLOW, '  so an empty result says nothing about the hopping endpoints.'));
+        console.log(c(DIM, '  Check what you do have:  npm run water_rtl_check\n'));
+      }
+    }
+  }
+
+  const args = rtl433.parse_args(arg_text);
   const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   const format = mode.format ? make_formatter() : null;
   const tally = mode.tally ? make_tally() : null;
@@ -534,5 +655,6 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { MODES, pm2_state, hop_centres, make_tally,
+module.exports = { MODES, pm2_state, hop_centres, orion_hops, make_tally, protocol_table, present_protocols,
+  ORION_LOW_MHZ, ORION_HIGH_MHZ, ORION_RATE_KHZ,
   SWEEP_LOW_MHZ, SWEEP_HIGH_MHZ, SWEEP_RATE_KHZ, ORION_PROTOCOLS };
