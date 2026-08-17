@@ -26,8 +26,43 @@ forget. Prefer them to typing `rtl_433` by hand.
 | **Listen — the neighbourhood** | `npm run water_listen_nearby` | 914.488 – 915.512 | everything nearby **except** your meter |
 | Listen — neighbourhood + mine | `npm run water_listen_wide` | 914.800 – 917.200 | both, in one window |
 | Listen — hop the WHOLE band | `npm run water_listen_sweep` | 901.8 – 928.2, 2.4 at a time | anything in the ISM band, 8% of the time |
+| **Hopping endpoints — my window** | `npm run water_listen_hop` | 915.650 – 917.250 | protocols 223 + **282/290**, ~6% of the band |
+| **Hopping endpoints — whole band** | `npm run water_listen_hopsweep` | 901.8 – 928.2, 2.4 at a time | 223 + **282/290** anywhere, 8% of the time |
 | Signal figures | `npm run water_listen_signal` | 915.650 – 917.250 | per-packet rssi/snr/freq + running mean |
-| Protocol 223 present? | `npm run water_rtl_check` | — | no dongle needed |
+| Which Orion decoders? | `npm run water_rtl_check` | — | reports 223 / 282 / 290 separately, no dongle needed |
+
+### The two hopping-endpoint modes
+
+Protocol **223** — "Badger ORION water meter, 100kbps" — is a *fixed-frequency* endpoint, and it is
+what the collector reads. **282** and **290** are newer Orion variants that **frequency-hop across
+the whole 902–928 band**. That is why meter `40462356`, which the utility can see, has never
+appeared in this app: the collector's window is 1.6 MHz of a 26 MHz band.
+
+Both modes add `-R 282 -R 290` and `-M protocol`. The protocol flag matters — without it every
+decode is just a model string and you cannot tell 282 from 290 from 223.
+
+Read the two results **very differently**:
+
+| Mode | Coverage | What silence means |
+|---|---|---|
+| `hop` | one fixed 1.6 MHz slice | **Almost nothing.** A hopping endpoint is in this window a small fraction of the time. A *decode* here is the interesting result |
+| `hopsweep` | 13 positions × 20 s, ~4 min per pass | Still only ~8% of any one slice. Run **several full passes** before calling it empty |
+
+Ctrl-C prints the scoreboard: every endpoint heard, keyed on **(protocol, id)** — the same endpoint
+decoded by two protocols is genuinely two findings — with packet count, frequency *range* and mean
+SNR. A range rather than a single frequency is the hopping confirming itself.
+
+Two results worth reading carefully:
+
+- **Nothing at all, not even 223.** That is the radio, not the band — 223 normally arrives every
+  ~4 s. Run `water_rtl_check` and look at the antenna.
+- **223 only.** Either there is genuinely nothing hopping in range, or this rtl_433 build lacks the
+  282/290 decoders — in which case the run could never have found them. `water_rtl_check` now
+  reports the three protocol numbers separately for exactly this reason.
+
+Even a positive result does **not** mean the collector can read a hopping meter usefully. Catching
+~6% of an endpoint's transmissions gives you gappy readings, fine for "this exists nearby" and
+useless for usage totals. Finding one is the start of a hardware conversation, not the end of it.
 
 And three that use `rtl_fm` rather than `rtl_433`, for analogue audio:
 

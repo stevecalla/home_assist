@@ -22,6 +22,8 @@
     "water_listen_nearby": "node src/home_assist/modules/water/listen.js nearby",
     "water_listen_wide": "node src/home_assist/modules/water/listen.js wide",
     "water_listen_sweep": "node src/home_assist/modules/water/listen.js sweep",
+    "water_listen_hop": "node src/home_assist/modules/water/listen.js hop",
+    "water_listen_hopsweep": "node src/home_assist/modules/water/listen.js hopsweep",
     "water_listen_signal": "node src/home_assist/modules/water/listen.js signal",
     "water_fm": "node src/home_assist/modules/water/audio.js fm 98.5",
     "water_am": "node src/home_assist/modules/water/audio.js am 124.0",
