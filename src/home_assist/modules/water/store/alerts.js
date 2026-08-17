@@ -37,25 +37,31 @@ const SUBJECT_PREFIX = {
 };
 
 /**
- * Has `alert_key` fired within the last `cooldown_min` minutes?
+ * Has `alert_key` fired for THIS METER within the last `cooldown_min` minutes?
  * Only counts rows we actually delivered OR that were suppressed for a real reason — a failed send
  * still counts, otherwise a broken SMTP config would retry every minute forever.
+ *
+ * `meter_id` is part of the key, and this is the single most important line in the file now that
+ * more than one meter can raise an alert. Keyed on alert_key alone, a neighbour whose overnight
+ * rule tripped first would take the cooldown slot and SUPPRESS YOURS for the next six hours -- a
+ * silent failure of the exact thing this app exists to do. Two houses, one mutex.
  */
-async function in_cooldown(alert_key, cooldown_min) {
+async function in_cooldown(alert_key, cooldown_min, meter_id) {
   const since = time.sql_utc(new Date(Date.now() - Number(cooldown_min) * 60000));
   const rows = await db.query(
-    'SELECT 1 FROM water_alerts WHERE alert_key = ? AND fired_at_utc >= ? LIMIT 1',
-    [alert_key, since]
+    'SELECT 1 FROM water_alerts WHERE meter_id = ? AND alert_key = ? AND fired_at_utc >= ? LIMIT 1',
+    [Number(meter_id) || 0, alert_key, since]
   );
   return rows.length > 0;
 }
 
-async function record(alert, delivered, note) {
+async function record(alert, delivered, note, meter_id) {
   const s = time.stamps(new Date());
   await db.query(
-    'INSERT INTO water_alerts (alert_key, kind, severity, message, detail, delivered, delivery_note, fired_at_utc, fired_at_mtn, created_at_mtn, created_at_utc) ' +
-    'VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO water_alerts (meter_id, alert_key, kind, severity, message, detail, delivered, delivery_note, fired_at_utc, fired_at_mtn, created_at_mtn, created_at_utc) ' +
+    'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     [
+      Number(meter_id) || 0,
       alert.key, alert.kind, alert.severity || 'default', alert.message,
       alert.detail ? JSON.stringify(alert.detail) : null,
       delivered ? 1 : 0, note ? String(note).slice(0, 250) : null,
@@ -69,7 +75,7 @@ function build_email(alert, cfg, ctx) {
   const rows = [
     ['When', time.sql_local(now) + ' ' + (process.env.WATER_TZ || 'America/Denver')],
     ['Signal', alert.kind],
-    ['Meter', String(cfg.meter_id)],
+    ['Meter', String((ctx && ctx.meter_id) || cfg.meter_id)],
   ];
   if (ctx && ctx.last_gallons !== undefined && ctx.last_gallons !== null) {
     rows.push(['Meter reading', Number(ctx.last_gallons).toFixed(0) + ' gal']);
@@ -107,10 +113,30 @@ function build_email(alert, cfg, ctx) {
  * Deliver one alert descriptor, honouring its cooldown. Returns:
  *   { sent: false, reason: 'cooldown' }        already said recently
  *   { sent: true, channels: { email, ntfy } }  recorded (delivery per-channel may still have failed)
+ *
+ * `ctx.meter_id` says which meter this is about (defaults to yours) and `ctx.notify` says whether
+ * it may be DELIVERED. Those are two different questions and separating them is the whole design:
+ * an observed meter's alert is recorded and shown, so its history and banner work, but no email and
+ * no push. Waking someone at 3am about a stranger's shower is not a feature.
  */
 async function dispatch(alert, cfg, ctx) {
-  if (await in_cooldown(alert.key, alert.cooldown_min || 360)) {
+  const meter_id = (ctx && ctx.meter_id) || cfg.meter_id;
+  // Delivery is opt-IN, and defaults to on only for your own meter. A missing ctx (the daily
+  // summary, the test button) is therefore delivered exactly as before.
+  const may_deliver = ctx && ctx.notify !== undefined
+    ? !!ctx.notify
+    : Number(meter_id) === Number(cfg.meter_id);
+
+  if (await in_cooldown(alert.key, alert.cooldown_min || 360, meter_id)) {
     return { sent: false, reason: 'cooldown' };
+  }
+
+  if (!may_deliver) {
+    // Recorded, never sent. `delivered = 0` with a note that says WHY, so a row with no delivery is
+    // never mistaken for a transport failure -- those two look identical in a list and mean
+    // completely different things.
+    await record(alert, false, 'not delivered — notify is off for meter ' + meter_id, meter_id);
+    return { sent: true, delivered: false, channels: {}, note: 'recorded only (notify off)' };
   }
 
   const channels = {};
@@ -140,7 +166,7 @@ async function dispatch(alert, cfg, ctx) {
   if (!notes.length) notes.push('no channel enabled — logged only');
 
   const delivered = Object.keys(channels).some(function (k) { return channels[k].ok; });
-  await record(alert, delivered, notes.join('; '));
+  await record(alert, delivered, notes.join('; '), meter_id);
 
   return { sent: true, delivered: delivered, channels: channels, note: notes.join('; ') };
 }
@@ -162,11 +188,31 @@ async function send_test(cfg, who) {
   return dispatch(alert, cfg, null);
 }
 
-async function recent(limit) {
+/**
+ * The alert history. `meter_id` filters; omit it for everything.
+ *
+ * Rows written before alerts were per-meter carry meter_id = 0. They are matched to the OWNED meter
+ * rather than hidden, because when they were written there was only one meter that could alert --
+ * that is a fact about the data, not a guess.
+ */
+async function recent(limit, meter_id, owned_meter_id) {
+  const cap = Math.max(1, Math.min(Number(limit) || 50, 500));
+  const cols = 'id, meter_id, alert_key, kind, severity, message, detail, delivered, delivery_note, ' +
+    'fired_at_utc, fired_at_mtn';
+  const mid = Number(meter_id) || 0;
+  if (!mid) {
+    return db.query('SELECT ' + cols + ' FROM water_alerts ORDER BY id DESC LIMIT ?', [cap]);
+  }
+  const owned = Number(owned_meter_id) || 0;
+  if (mid === owned) {
+    return db.query(
+      'SELECT ' + cols + ' FROM water_alerts WHERE meter_id IN (?, 0) ORDER BY id DESC LIMIT ?',
+      [mid, cap]
+    );
+  }
   return db.query(
-    'SELECT id, alert_key, kind, severity, message, detail, delivered, delivery_note, fired_at_utc, fired_at_mtn ' +
-    'FROM water_alerts ORDER BY id DESC LIMIT ?',
-    [Math.max(1, Math.min(Number(limit) || 50, 500))]
+    'SELECT ' + cols + ' FROM water_alerts WHERE meter_id = ? ORDER BY id DESC LIMIT ?',
+    [mid, cap]
   );
 }
 

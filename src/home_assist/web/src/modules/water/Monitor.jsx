@@ -221,10 +221,10 @@ export default function Monitor() {
   const loadSlow = useCallback(async () => {
     const h = await api.waterHourly(48, sel);
     if (h.status === 200 && h.body.ok) setHourly(h.body);
-    // Alerts are NOT filtered by the picker: they only ever fire for your own meter, and a history
-    // that emptied itself when you looked at a neighbour would read as "no alerts", not "not
-    // applicable". The card is labelled accordingly.
-    const a = await api.waterAlerts(5);
+    // Alerts now follow the picker too, because the collector runs the rules for observed meters
+    // and RECORDS the result. What still does not follow it is DELIVERY -- a neighbour's alert is
+    // stored and shown, never emailed or pushed.
+    const a = await api.waterAlerts(5, sel);
     if (a.status === 200 && a.body.ok) setAlerts(a.body.alerts);
   }, [sel]);
 
@@ -319,8 +319,6 @@ export default function Monitor() {
   // times into one interval or one SNR average describes no real transmitter.
   const selId = /^[0-9]+$/.test(sel) ? Number(sel) : null;
   const rtFocus = selId !== null ? rtPackets : rtPackets.filter((p) => p.is_ours);
-  // packet_series returns oldest-first, so the newest row is the last one.
-  const rtNewest = rtFocus.length ? rtFocus[rtFocus.length - 1] : null;
   // The key is (meter_id, heard_at_utc) — the table's PRIMARY KEY, and stable for the life of the
   // row. It briefly included the array index, which was wrong in a way that only shows up live:
   // rows are newest-first, so ONE arrival at the top shifted every index below it and therefore
@@ -349,23 +347,19 @@ export default function Monitor() {
   })();
   const rtSnrBand = band_of(rt && rt.quality, 'snr', rtLastSnr);
 
-  // A neighbour's odometer is not in water_collector_state -- that table only tracks ours -- but it
-  // is right there in their packets. Same for "when did this meter last transmit".
-  const focusOdo = selId !== null
-    ? (rtNewest ? rtNewest.volume : null)
-    : liveOdo;
-  const focusLastAt = selId !== null
-    ? (rtNewest ? rtNewest.heard_at_utc : null)
-    : r.last_read_at;
-  const focusSecs = focusLastAt
-    ? Math.max(0, Math.round((tick - new Date(focusLastAt).getTime()) / 1000))
-    : null;
-  // Heartbeat and Long view get their numbers from /api/water/meter and /api/water/status, both of
-  // which now take the same `meter` parameter — so those two already describe the selected meter and
-  // need no client-side substitution. Real time is the exception: its numbers come from packets.
-  const cardOdo = mode === 'realtime' ? focusOdo : liveOdo;
-  const cardSecs = mode === 'realtime' ? focusSecs : secsSince;
-  const cardLastAt = mode === 'realtime' ? focusLastAt : r.last_read_at;
+  // ONE clock, for every tab and every selection.
+  //
+  // This used to read the odometer and the last-heard time off the newest row of the packet ARRAY
+  // whenever a specific meter was picked, because /api/water/status was owned-only and had nothing
+  // to say about a neighbour. It is not owned-only any more, and keeping the packet fallback meant
+  // two sources refreshed by two different polls: the banner said 3:32:34 while the card said
+  // 3:32:30 and "9s ago" -- four seconds apart, both honestly reporting what they last fetched.
+  //
+  // Reading everything from `status` makes them identical by construction rather than by timing.
+  // The 1-second `tick` still ages the counter smoothly between the 5-second polls.
+  const cardOdo = liveOdo;
+  const cardLastAt = r.last_read_at;
+  const cardSecs = secsSince;
   const cardTitle = selId !== null ? selId + ' — live' : 'Meter — live';
 
   const exportHeaders = mode === 'long' ? lvHeaders : mode === 'realtime' ? rtHeaders : hbHeaders;
@@ -716,7 +710,7 @@ export default function Monitor() {
                   : undefined}
                 liveLabel="new transmissions"
                 filterPlaceholder="Filter — try a meter id, CRC, or a volume"
-                renderCell={renderPacketCell(rt && rt.quality, status.meter_id)}
+                renderCell={renderPacketCell(rt && rt.quality, status.own_meter_id)}
                 emptyMessage={rt && !rt.enabled
                   ? 'Recording is off. Turn on "Record every transmission" in Settings.'
                   : 'Waiting for the first transmission…'}
@@ -849,6 +843,10 @@ export default function Monitor() {
                   highlight: lv ? d.gallons > lv.summary.high_threshold : false,
                 }))}
                 height={220}
+                // Daily totals are the numbers you actually quote to yourself ("we used 140
+                // yesterday"), so they get printed on the bars. BarChart drops them automatically
+                // once the bars are too narrow, which is what keeps 90d and 365d readable.
+                showValues
                 formatTip={(d) => (d.observed
                   ? `${d.key} — ${d.value.toFixed(0)} gal`
                   : `${d.key} — no data (the collector was not running)`)}
@@ -923,12 +921,14 @@ export default function Monitor() {
       {/* Recent alerts, with delivery status. An alert that was raised but never delivered is the
           failure this panel exists to make impossible to miss.
 
-          This card deliberately does NOT follow the meter picker: alerts are only ever raised for
-          your own meter, so filtering it would show an empty list that reads as "no alerts" when
-          the truth is "not applicable". The sub-line says so when a neighbour is selected. */}
+          Follows the picker. The sub-line says what an observed meter's alerts mean, because
+          "recorded but not delivered" and "delivery failed" look identical in a list and are
+          completely different facts. */}
       <CollapsibleCard
         title="Recent alerts"
-        sub={selId !== null ? 'Alerts are raised for your meter only — this list does not follow the meter selector.' : undefined}
+        sub={selId !== null && selId !== status.own_meter_id
+          ? 'Detected and recorded for ' + selId + ', never emailed or pushed — observed meters are watched, not delivered.'
+          : undefined}
         defaultOpen={false}
         forceOpen={force.open}
         forceKey={force.key}

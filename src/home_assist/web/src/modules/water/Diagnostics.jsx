@@ -97,11 +97,17 @@ export default function Diagnostics() {
       {/* ── the live one ─────────────────────────────────────────────────────────── */}
       <div className="w-chart-card">
         <div className="w-chart-head">
-          <h3 className="w-chart-title">Reception — is the radio hearing your meter?</h3>
+          <h3 className="w-chart-title">
+            {selId !== null
+              ? 'Reception — is the radio hearing ' + selId + '?'
+              : 'Reception — is the radio hearing your meter?'}
+          </h3>
           {rx ? <RxBadge seconds={rx.seconds_since_last} /> : null}
         </div>
         <p className="w-chart-sub">
-          One bar per minute, counting packets from <strong>your</strong> meter. This is written to{' '}
+          One bar per minute, counting packets from{' '}
+          <strong>{selId !== null ? 'meter ' + selId : 'your'}</strong>
+          {selId !== null ? '' : ' meter'}. This is written to{' '}
           <code>water_reception</code> continuously and kept for weeks — unlike the raw lines below,
           which stop after the first 20 of each run by design. <strong>A gap here is real:</strong>{' '}
           it means the radio genuinely heard nothing that minute.
@@ -118,7 +124,7 @@ export default function Diagnostics() {
               data={rx.series.map((m) => ({
                 key: m.minute_utc,
                 label: String(m.minute_mtn || '').slice(11, 16),
-                value: m.packets_ours,
+                value: m.packets_meter,
                 observed: true,
               }))}
               height={140}
@@ -126,13 +132,19 @@ export default function Diagnostics() {
               formatTip={(d) => d.label + ' · ' + d.value + ' packets'}
               emptyMessage="No reception rows yet."
             />
-            <RxStats series={rx.series} />
+            <RxStats series={rx.series} selId={selId} />
           </>
         )}
       </div>
 
       <div className="w-chart-card">
         <div className="w-chart-head"><h3 className="w-chart-title">Raw decoder output</h3></div>
+        {selId !== null ? (
+          <p className="w-chart-sub small muted">
+            Not filtered by the meter selector — these are the undecoded lines from every endpoint,
+            which is the whole point of this card.
+          </p>
+        ) : null}
         <p className="w-chart-sub">
           The actual packets your meter broadcast, exactly as the radio decoded them — <strong>real
           data, not test data</strong>. The collector keeps the first 20 of each run so you can check
@@ -242,11 +254,14 @@ function RxBadge({ seconds }) {
 
 // The numbers you actually tune an antenna against. rssi/snr are only present when -M level is in
 // WATER_RTL433_ARGS; say so rather than showing an empty column nobody can explain.
-function RxStats({ series }) {
+function RxStats({ series, selId }) {
   const mins = series.length;
-  const ours = series.reduce((a, m) => a + m.packets_ours, 0);
+  // packets_meter, not packets_ours: on a neighbour's rows "ours" is zero by definition and every
+  // stat below would read as a dead antenna.
+  const ours = series.reduce((a, m) => a + m.packets_meter, 0);
   const total = series.reduce((a, m) => a + m.packets_total, 0);
-  const dead = series.filter((m) => m.packets_ours === 0).length;
+  const dead = series.filter((m) => m.packets_meter === 0).length;
+  const who = selId !== null ? String(selId) : 'your meter';
   const withRssi = series.filter((m) => m.rssi_avg !== null);
   const rssi = withRssi.length ? withRssi.reduce((a, m) => a + m.rssi_avg, 0) / withRssi.length : null;
   const withSnr = series.filter((m) => m.snr_avg !== null);
@@ -255,8 +270,8 @@ function RxStats({ series }) {
 
   return (
     <div className="w-rx-stats">
-      <span><b>{(ours / Math.max(1, mins)).toFixed(1)}</b> packets/min from your meter</span>
-      <span><b>{ours}</b> of {total} heard were yours</span>
+      <span><b>{(ours / Math.max(1, mins)).toFixed(1)}</b> packets/min from {who}</span>
+      <span><b>{ours}</b> of {total} heard were {selId !== null ? 'from ' + who : 'yours'}</span>
       <span className={dead ? 'bad' : ''}><b>{dead}</b> minute{dead === 1 ? '' : 's'} with none</span>
       {snr !== null
         ? <span>SNR <b>{snr.toFixed(1)} dB</b>{rssi !== null ? ' · RSSI ' + rssi.toFixed(1) : ''}</span>

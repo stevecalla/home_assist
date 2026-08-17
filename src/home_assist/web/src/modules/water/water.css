@@ -122,6 +122,13 @@
 .w-gridline { stroke: var(--w-grid); stroke-width: 1; }
 .w-baseline { stroke: var(--w-axis); stroke-width: 1; }
 .w-axis-label { fill: var(--w-axis); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* Value labels sit ABOVE the bar in muted text, never inside it in white -- inside is unreadable on
+   any bar shorter than the type, which is most of them on a quiet week. pointer-events: none keeps
+   the label from stealing the hover target underneath it. */
+.w-bar-value {
+  fill: var(--w-axis); font-size: 10px; font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
 .w-band-rect { fill: var(--w-band); }
 .w-band-label { fill: var(--w-axis); font-size: 10px; }
 
@@ -214,6 +221,10 @@
 .w-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--line); }
 .w-pill.sent { color: var(--w-good); }
 .w-pill.failed { color: var(--w-critical); }
+/* Raised, recorded, and deliberately not delivered — an observed meter. A THIRD state, not a
+   shade of "failed": red here would report the system working as designed as a broken channel,
+   which is the one reading that would make you stop trusting the red ones that are real. */
+.w-pill.watched { color: var(--w-axis); }
 
 /* ── mobile ────────────────────────────────────────────────────────────── */
 

@@ -171,6 +171,11 @@ async function create_collector(options) {
   // meter_id -> gallons per tick. A Badger classic counts 1 gallon, a newer endpoint 0.1, so
   // applying the wrong factor is a silent 10x error that looks entirely plausible on a chart.
   let scales = new Map();
+  // Observed meters that the rules should run for, refreshed each tick from the registry, plus
+  // their per-meter run-alarm memory. Keyed by meter id so one neighbour's shower cannot cancel
+  // another's all-clear.
+  let observed_meters = [];
+  const observed_alarm_run = new Map();
 
   function rx_for(id) {
     let e = other_rx.get(id);
@@ -369,6 +374,53 @@ async function create_collector(options) {
     }
   }
 
+  /**
+   * Run the leak rules for every meter that is not ours.
+   *
+   * Detection and delivery are separate concerns here. Everything below is recorded; `notify` on
+   * water_meters decides whether anything is actually SENT, and it defaults to 0 for a neighbour.
+   *
+   * Deliberately omitted: the watchdog (`last_read_at` is passed as `now`, which can never be
+   * stale). Silence from a neighbour is a fact about my antenna, not about their plumbing, and an
+   * alert that fires whenever reception dips is an alert you learn to ignore.
+   */
+  async function tick_observed(now) {
+    const reg = observed_meters;
+    if (!reg.length) return;
+    for (const m of reg) {
+      const pid = Number(m.meter_id);
+      try {
+        const hours = await readings.hour_map(pid, 72);
+        const recent = await readings.recent_readings(pid, 500);
+        const current = rules.current_run(recent, now, cfg);
+        const fired = rules.evaluate({
+          hours: hours, now: now, cfg: cfg, tz: time.zone(),
+          // `now`, not their last reading: this is what disables the watchdog for observed meters.
+          last_read_at: now,
+          started_at: started_at,
+          run: current,
+          last_alarm_run: observed_alarm_run.get(pid) || null,
+        });
+        for (const alert of fired) {
+          if (alert.kind === 'stale') continue;          // belt and braces -- see above
+          const r = await alerts.dispatch(alert, cfg, {
+            meter_id: pid,
+            notify: !!m.notify,
+            last_gallons: (other_last.get(pid) || {}).gallons ?? null,
+          });
+          if (r.sent) log('ALERT [' + alert.kind + '] meter ' + pid + ' ' + alert.message + '  (' + r.note + ')');
+          if (alert.kind === 'run') {
+            observed_alarm_run.set(pid, {
+              key: alert.key, minutes: current.minutes,
+              gallons: current.gallons, started_at: current.started_at,
+            });
+          }
+        }
+        if (observed_alarm_run.get(pid) && !current.flowing) observed_alarm_run.delete(pid);
+      } catch (e) { /* one meter's rules must never stop the next, or the owned tick */ }
+    }
+  }
+
   // ─────────────────────────── the periodic check ─────────────────────────
   async function tick() {
     try {
@@ -382,6 +434,10 @@ async function create_collector(options) {
           next.set(Number(m.meter_id), m.owned ? cfg.gallons_per_unit : (m.gallons_per_unit || 1));
         });
         scales = next;
+        // Only meters we are actually storing readings for can have rules run over them -- a meter
+        // with packets but no hourly rows would evaluate to a flat zero every hour, which the
+        // overnight rule correctly reads as "no water" and the continuous rule as "nothing running".
+        observed_meters = reg.filter(function (m) { return !m.owned && m.has_readings; });
       } catch (e) { /* keep the previous map */ }
       const now = new Date();
       const hours = await readings.hour_map(meter_id, 72);
@@ -434,6 +490,17 @@ async function create_collector(options) {
       // The run ended and the all-clear has gone out (or was disabled) — forget it, so the next
       // run starts from a clean slate.
       if (last_alarm_run && !current.flowing) last_alarm_run = null;
+
+      // ── observed meters: detect, record, never deliver ──────────────────────────────────────
+      //
+      // Same pure rules, same thresholds, run over each observed meter's own hour buckets. The
+      // results are STORED so the Alerts page and the banner work for any selection, and are never
+      // emailed or pushed -- `notify` is 0 for these meters unless you turn it on per meter.
+      //
+      // The watchdog is deliberately excluded. "Receiver silent" on a neighbour means MY antenna
+      // lost THEM, not that their pipe burst. Firing it would produce a constant stream of alerts
+      // about my own reception and train you to ignore the one alert that matters.
+      try { await tick_observed(now); } catch (e) { /* never fatal */ }
 
       // Persist what the radio heard this minute BEFORE anything else in the tick can fail. This
       // is the record you go looking for when the dashboard is empty and you need to know whether

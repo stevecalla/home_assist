@@ -141,20 +141,65 @@ test('the selection is shared by every water page and resets on load', function 
   }
 });
 
-test('alerts and leak rules stay owned-only', function () {
-  // Display follows the picker; ACTION does not. The collector may never raise an alert about a
-  // neighbour's water, and the alert history must not be filtered by the picker either -- an empty
-  // list reads as "no alerts", which is the opposite of "not applicable".
-  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
-  const i = run.indexOf('async function ingest_other');
+test('detection runs for every meter; DELIVERY is owned-only', function () {
+  // The boundary that replaced "alerts are owned-only". Observed meters are now watched -- the same
+  // pure rules run over their hour buckets and the results are recorded -- but nothing is emailed
+  // or pushed for them. Waking someone at 3am about a stranger's shower is not a feature, and the
+  // two halves of that sentence are enforced in two different places.
+  const store = fs.readFileSync(require.resolve('../store/alerts'), 'utf8');
+  const i = store.indexOf('async function dispatch');
   assert.ok(i !== -1);
-  const body = run.slice(i, run.indexOf('\n  }', i));
-  assert.ok(body.indexOf('alerts.') === -1, 'a neighbour must never fire an alert');
-  assert.ok(body.indexOf('rules.') === -1, 'a neighbour must never run the leak rules');
+  const body = store.slice(i, store.indexOf('\n}', i));
+  assert.match(body, /may_deliver/, 'delivery must be a separate decision from detection');
+  assert.match(body, /if \(!may_deliver\)/, 'a meter with notify off must short-circuit before any send');
+  // Recorded, not dropped: the history and the banner need the row.
+  const gate = body.slice(body.indexOf('if (!may_deliver)'), body.indexOf('const channels'));
+  assert.match(gate, /await record\(/, 'a non-delivered alert must still be recorded');
+  assert.ok(gate.indexOf('mailer') === -1 && gate.indexOf('ntfy') === -1,
+    'nothing may be sent on the not-delivered path');
 
-  const ui = fs.readFileSync(
-    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
-  assert.match(ui, /api\.waterAlerts\(5\)/, 'the alert history takes no meter parameter');
+  // ingest_other still touches no rule and no alert -- the collector's fast path stays clean; the
+  // observed rules run on the slow tick instead.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  const k = run.indexOf('async function ingest_other');
+  const ing = run.slice(k, run.indexOf('\n  }', k));
+  assert.ok(ing.indexOf('alerts.') === -1, 'the packet path must never dispatch an alert');
+  assert.ok(ing.indexOf('rules.') === -1, 'the packet path must never run the leak rules');
+});
+
+test('one meter cooldown can never suppress another meter alert', function () {
+  // The dangerous one. Keyed on alert_key alone, a neighbour whose overnight rule tripped first
+  // takes the cooldown slot and silences YOURS for the next six hours -- two houses sharing one
+  // mutex, and the failure is completely invisible.
+  const store = fs.readFileSync(require.resolve('../store/alerts'), 'utf8');
+  const i = store.indexOf('async function in_cooldown');
+  assert.ok(i !== -1);
+  const body = store.slice(i, store.indexOf('\n}', i));
+  assert.match(body, /WHERE meter_id = \? AND alert_key = \?/,
+    'the cooldown ledger must be keyed on (meter_id, alert_key)');
+  assert.match(body, /function in_cooldown\(alert_key, cooldown_min, meter_id\)/);
+});
+
+test('the receiver-silent watchdog never fires for an observed meter', function () {
+  // Silence from a neighbour means MY antenna lost THEM, not that their pipe burst. A watchdog that
+  // fires whenever reception dips is one you learn to ignore -- and it is the single alert that must
+  // never be ignored, because silence is the one state indistinguishable from a quiet night.
+  const run = fs.readFileSync(require.resolve('../collector/run'), 'utf8');
+  const i = run.indexOf('async function tick_observed');
+  assert.ok(i !== -1, 'the observed rules tick must exist');
+  const body = run.slice(i, run.indexOf('\n  }\n', i));
+  assert.match(body, /last_read_at: now/, 'passing `now` is what makes the watchdog unable to trip');
+  assert.match(body, /alert\.kind === 'stale'\) continue/, 'and a second, explicit guard');
+  assert.match(body, /notify: !!m\.notify/, 'delivery is decided by the registry, not by an if here');
+});
+
+test('the owned meter is the only one that notifies by default', function () {
+  const store = fs.readFileSync(require.resolve('../store/meters'), 'utf8');
+  const i = store.indexOf('async function ensure_owned');
+  assert.match(store.slice(i, i + 900), /notify = 1/, 'your meter notifies from the first boot');
+  const schema = fs.readFileSync(require.resolve('../../../store/schema'), 'utf8');
+  assert.match(schema, /notify\s+TINYINT\(1\)\s+NOT NULL DEFAULT 0/,
+    'every other meter must default to recorded-only');
 });
 
 test('the observed backfill can never overwrite a live hour', function () {
@@ -168,4 +213,66 @@ test('the observed backfill can never overwrite a live hour', function () {
   assert.ok(body.indexOf('ON DUPLICATE KEY UPDATE') === -1, 'it must never update an existing hour');
   assert.match(body, /meter_id <> \?/, 'it must never touch the owned meter');
   assert.match(body, /heard_at_mtn/, 'hour buckets are LOCAL -- the UTC column would misfile them');
+});
+
+test('the card clock and the banner clock are the same clock', function () {
+  // The bug: the card read the odometer and last-heard off the newest row of the PACKET array while
+  // the banner read them from /api/water/status. Two sources, two poll intervals, so the banner said
+  // 3:32:34 and the card said 3:32:30 with "9s ago" -- both honest, four seconds apart. Now that
+  // status follows the selection there is no reason for a second source, and one source cannot
+  // disagree with itself.
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
+  assert.match(ui, /const cardOdo = liveOdo;/);
+  assert.match(ui, /const cardLastAt = r\.last_read_at;/);
+  assert.match(ui, /const cardSecs = secsSince;/);
+  assert.ok(ui.indexOf('rtNewest') === -1,
+    'the packet-array fallback is what produced two clocks and must be gone');
+});
+
+test('"mine" is decided by the OWNED meter, never by the selected one', function () {
+  // Selecting 14905174 badged every one of its rows "mine", because the cell renderer was handed
+  // status.meter_id -- which now means "the meter in view". The same conflation the whole pass
+  // exists to remove, reintroduced one argument at a time.
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
+  assert.match(ui, /renderPacketCell\(rt && rt\.quality, status\.own_meter_id\)/);
+  assert.ok(ui.indexOf('renderPacketCell(rt && rt.quality, status.meter_id)') === -1);
+});
+
+test('every per-minute chart reads packets_meter, not packets_ours', function () {
+  // On a neighbour's reception row packets_ours is zero BY DEFINITION. A chart plotting it draws a
+  // flatline, and a flatline on this chart means "the radio heard nothing" -- the opposite of the
+  // truth, stated confidently.
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  assert.match(api, /packets_meter: Number\(r\.packets_meter\)/,
+    '/api/water/reception must expose the per-meter count');
+  const diag = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Diagnostics.jsx'), 'utf8');
+  assert.match(diag, /value: m\.packets_meter/, 'the reception chart must plot it');
+  assert.ok(diag.indexOf('m.packets_ours') === -1,
+    'no stat on Diagnostics may still be keyed to "is it mine"');
+});
+
+test('bar value labels are dropped rather than allowed to collide', function () {
+  // And never printed on a no-data bar: "0" over a stub erases the one distinction this chart works
+  // hardest to keep. On a leak monitor "no reading" and "no water" are opposite conclusions.
+  const chart = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/BarChart.jsx'), 'utf8');
+  assert.match(chart, /VALUE_LABEL_MIN_PX/, 'there must be a width floor, not an unconditional label');
+  assert.match(chart, /labelValues = showValues && slot >= VALUE_LABEL_MIN_PX/);
+  assert.match(chart, /labelValues && d\.observed/, 'only observed bars may carry a number');
+});
+
+test('a recorded-but-undelivered alert is not shown as a failure', function () {
+  // Three states, not two. "delivery failed" and "deliberately not delivered" render identically as
+  // a red cross, and one is a broken channel while the other is the system working as designed --
+  // conflating them teaches you to ignore the red ones that are real.
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Alerts.jsx'), 'utf8');
+  assert.match(ui, /notify is off/, 'the recorded-only state must be detected');
+  assert.match(ui, /recorded only/);
+  const css = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/water.css'), 'utf8');
+  assert.match(css, /\.w-pill\.watched/, 'and must have its own, non-red treatment');
 });

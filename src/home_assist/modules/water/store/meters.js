@@ -81,7 +81,7 @@ async function record_heard(seen, owned_meter_id) {
  */
 async function list() {
   const rows = await db.query(
-    'SELECT m.meter_id, m.label, m.model, m.owned, m.collect_readings, m.gallons_per_unit, ' +
+    'SELECT m.meter_id, m.label, m.model, m.owned, m.collect_readings, m.gallons_per_unit, m.notify, ' +
     '       m.first_heard_utc, m.first_heard_mtn, m.last_heard_utc, m.last_heard_mtn, m.packets_seen, ' +
     '       EXISTS(SELECT 1 FROM water_packets p WHERE p.meter_id = m.meter_id) AS has_packets, ' +
     '       EXISTS(SELECT 1 FROM water_hourly  h WHERE h.meter_id = m.meter_id) AS has_readings ' +
@@ -95,6 +95,9 @@ async function list() {
       model: r.model || null,
       owned: !!r.owned,
       collect_readings: !!r.collect_readings,
+      // Whether this meter's alerts are DELIVERED. Detection is unconditional; delivery is
+      // opt-in and off for neighbours, so a stranger's shower can never wake you at 3am.
+      notify: !!r.notify,
       gallons_per_unit: Number(r.gallons_per_unit),
       first_heard_mtn: r.first_heard_mtn || null,
       last_heard_mtn: r.last_heard_mtn || null,
@@ -120,9 +123,12 @@ async function ensure_owned(meter_id) {
       // No auto-label. "My meter" beside a "mine" badge said the same thing twice and pushed the
       // id -- the thing you actually search the table by -- out of view. A label is for a name a
       // human chose, not for a synonym of a flag.
-      'INSERT INTO water_meters (meter_id, owned, collect_readings, label, created_at_mtn) ' +
-      'VALUES (?,1,1,?,?) ' +
-      'ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1, label = NULL',
+      // notify = 1 here and nowhere else: YOUR meter is the one that may wake you, and that has to
+      // be true from the first boot rather than something you remember to switch on. Neighbours
+      // default to 0 from the column default and stay there unless deliberately changed.
+      'INSERT INTO water_meters (meter_id, owned, collect_readings, notify, label, created_at_mtn) ' +
+      'VALUES (?,1,1,1,?,?) ' +
+      'ON DUPLICATE KEY UPDATE owned = 1, collect_readings = 1, notify = 1, label = NULL',
       [id, null, n.local]
     );
   } catch (e) { /* best-effort */ }
