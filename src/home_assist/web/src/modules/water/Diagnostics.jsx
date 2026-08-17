@@ -270,7 +270,23 @@ function RxStats({ series, selId }) {
   const rssi = withRssi.length ? withRssi.reduce((a, m) => a + m.rssi_avg, 0) / withRssi.length : null;
   const withSnr = series.filter((m) => m.snr_avg !== null);
   const snr = withSnr.length ? withSnr.reduce((a, m) => a + m.snr_avg, 0) / withSnr.length : null;
-  const others = [...new Set(series.map((m) => m.other_ids).filter(Boolean))].join(' ');
+  // other_ids is stored PER MINUTE as "id x count" ("14905174x55"), so the raw distinct set is one
+  // entry per minute per meter -- sixty near-identical strings across an hour, which is what turned
+  // this line into a wall of text. Parse it back into (id, total) and sum, so one meter reads as one
+  // entry however long the window is.
+  const otherTotals = new Map();
+  series.forEach((m) => {
+    String(m.other_ids || '').split(/\s+/).filter(Boolean).forEach((tok) => {
+      const bits = tok.split('x');
+      const id = bits[0];
+      const n = Number(bits[1]) || 0;
+      if (!id) return;
+      otherTotals.set(id, (otherTotals.get(id) || 0) + n);
+    });
+  });
+  const others = [...otherTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, n]) => id + ' (' + n.toLocaleString() + ')');
 
   return (
     <div className="w-rx-stats">
@@ -280,7 +296,11 @@ function RxStats({ series, selId }) {
       {snr !== null
         ? <span>SNR <b>{snr.toFixed(1)} dB</b>{rssi !== null ? ' · RSSI ' + rssi.toFixed(1) : ''}</span>
         : <span className="muted">signal strength needs <code>-M level</code> in the rtl_433 args</span>}
-      {others ? <span className="muted">also hearing {others}</span> : null}
+      {others.length
+        ? <span className="muted" title="Other endpoints decoded in this window, with how many packets each. Captured for antenna comparison; never counted toward your usage.">
+            also hearing {others.join(' · ')}
+          </span>
+        : null}
     </div>
   );
 }

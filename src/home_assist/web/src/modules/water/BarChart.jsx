@@ -47,8 +47,8 @@ export default function BarChart({
   formatTip,          // (d) => string
   emptyMessage = 'No data yet.',
   // Print each bar's value above it. Opt-in, and even then only when the bars are wide enough to
-  // hold a number without collision -- see VALUE_LABEL_MIN_PX. A chart that has to be hovered to be
-  // read is a chart you take on faith, but overlapping labels are worse than none.
+  // hold the number without collision -- see `labelValues` below. A chart that has to be hovered to
+  // be read is a chart you take on faith, but overlapping labels are worse than none.
   showValues = false,
 }) {
   const [hover, setHover] = useState(null);
@@ -74,12 +74,22 @@ export default function BarChart({
 
   const ticks = [0, niceMax / 2, niceMax];
 
-  // Value labels only when they fit. 22px holds three digits at 10px with a little air; below that
-  // "188" from one bar runs into "203" from the next and the chart becomes less readable than the
-  // one with no labels at all. 90 and 365 days fall well under this, and that is the correct answer
-  // -- the exact numbers are one click away on the table flip and in the CSV.
-  const VALUE_LABEL_MIN_PX = 22;
-  const labelValues = showValues && slot >= VALUE_LABEL_MIN_PX;
+  // Value labels only when they actually fit -- measured from the WIDEST label this chart will
+  // draw, not from a guess.
+  //
+  // A flat 22px floor was the first attempt and it was wrong: it silently suppressed labels on the
+  // 60-bar reception chart, where the values are two digits ("14") and would have fitted in the
+  // ~15px slots with room to spare. The number that matters is the width of the text, and that is
+  // knowable rather than assumable -- 6px per digit at 10px tabular-nums, plus 2px of air.
+  //
+  // So 2-digit values label down to ~14px slots and 3-digit values need ~20px. 90 and 365 days
+  // still fall under it and correctly show nothing; the exact figures are one click away on the
+  // table flip and in the CSV.
+  const CHAR_PX = 6;
+  const widestLabel = data.reduce(function (w, d) {
+    return d.observed ? Math.max(w, fmt(d.value).length) : w;
+  }, 1);
+  const labelValues = showValues && slot >= widestLabel * CHAR_PX + 2;
 
   return (
     <div className="w-chart" ref={ref}>

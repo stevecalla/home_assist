@@ -284,8 +284,12 @@ test('bar value labels are dropped rather than allowed to collide', function () 
   // hardest to keep. On a leak monitor "no reading" and "no water" are opposite conclusions.
   const chart = fs.readFileSync(
     require.resolve('../../../web/src/modules/water/BarChart.jsx'), 'utf8');
-  assert.match(chart, /VALUE_LABEL_MIN_PX/, 'there must be a width floor, not an unconditional label');
-  assert.match(chart, /labelValues = showValues && slot >= VALUE_LABEL_MIN_PX/);
+  // Measured from the widest label the chart will actually draw, not a hardcoded floor. A flat 22px
+  // silently suppressed labels on the 60-bar reception chart, where the values are two digits and
+  // fitted comfortably -- the threshold has to know how wide the text is.
+  assert.match(chart, /const widestLabel = data\.reduce/);
+  assert.match(chart, /labelValues = showValues && slot >= widestLabel \* CHAR_PX \+ 2/);
+  assert.ok(chart.indexOf('VALUE_LABEL_MIN_PX') === -1, 'the hardcoded floor must be gone');
   assert.match(chart, /labelValues && d\.observed/, 'only observed bars may carry a number');
 });
 
@@ -300,4 +304,15 @@ test('a recorded-but-undelivered alert is not shown as a failure', function () {
   const css = fs.readFileSync(
     require.resolve('../../../web/src/modules/water/water.css'), 'utf8');
   assert.match(css, /\.w-pill\.watched/, 'and must have its own, non-red treatment');
+});
+
+test('the "also hearing" line collapses per-minute rows into one entry per meter', function () {
+  // water_reception.other_ids is stored PER MINUTE as "id x count". Taking the distinct set across
+  // a 60-minute window therefore yields sixty near-identical strings for a single neighbour --
+  // "14905174x55 14905174x68 14905174x13 ..." -- which reads as dozens of meters rather than one.
+  const ui = fs.readFileSync(
+    require.resolve('../../../web/src/modules/water/Diagnostics.jsx'), 'utf8');
+  assert.match(ui, /otherTotals/, 'the counts must be summed per id, not listed per minute');
+  assert.ok(ui.indexOf('new Set(series.map((m) => m.other_ids)') === -1,
+    'the raw distinct-set version is the bug');
 });
