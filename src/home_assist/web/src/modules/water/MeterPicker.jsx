@@ -13,12 +13,19 @@ import { api } from '../../lib/api.js';
  *
  * Props:
  *   sel, setSel  the shared selection (from useMeterSel)
- *   ownId        your meter id, for the "This meter" tooltip
+ *   ownId        the meter "This meter" resolves to FOR YOU. Not necessarily the collector's own
+ *                meter: a user restricted to one meter gets that one. See access/meter_access.js.
  *   allowAll     false on pages that chart usage — two houses' odometers cannot be summed into one
  *                line, so "All meters" only means something where rows sit side by side
+ *
+ * Two different facts wear two different words in the dropdown, and keeping them apart is the point:
+ *   mine   the collector's own meter — a fact about the RADIO, the same for everyone
+ *   yours  the meter "This meter" lands on for YOU — a fact about your ACCESS
+ * They are the same meter on an unrestricted install, so only one badge shows.
  */
 export default function MeterPicker({ sel, setSel, ownId, allowAll = true }) {
   const [meterList, setMeterList] = useState(null);
+  const [myId, setMyId] = useState(null);
   const [open, setOpen] = useState(false);
 
   // Options come from water_meters, not from whatever packets were just fetched. Packets are pruned
@@ -27,10 +34,14 @@ export default function MeterPicker({ sel, setSel, ownId, allowAll = true }) {
   useEffect(() => {
     let live = true;
     api.waterMeters().then((r) => {
-      if (live && r.status === 200 && r.body.ok) setMeterList(r.body.meters);
+      if (live && r.status === 200 && r.body.ok) { setMeterList(r.body.meters); setMyId(r.body.own_meter_id); }
     });
     return () => { live = false; };
   }, []);
+
+  // Prefer the page's ownId, but this component fetches the same answer itself — so the tooltip and
+  // the "yours" badge still say the right thing on a page that does not pass one down.
+  const mine = ownId || myId;
 
   // A name YOU typed is shown; a generated one never is. An auto-name that only restates the
   // badge beside it says the same thing twice and hides the number. The id is always present
@@ -50,7 +61,7 @@ export default function MeterPicker({ sel, setSel, ownId, allowAll = true }) {
         <button type="button"
                 className={sel === 'mine' ? 'on' : ''}
                 onClick={() => { setSel('mine'); setOpen(false); }}
-                title={'Your meter' + (ownId ? ' (' + ownId + ')' : '')}>
+                title={'Your meter' + (mine ? ' (' + mine + ')' : '')}>
           This meter
         </button>
         <button type="button"
@@ -83,6 +94,7 @@ export default function MeterPicker({ sel, setSel, ownId, allowAll = true }) {
                     onClick={() => { setSel(String(m.meter_id)); setOpen(false); }}>
               {m.meter_id}
               {m.owned ? <i className="w-mine">mine</i> : null}
+              {!m.owned && mine && String(m.meter_id) === String(mine) ? <i className="w-yours">yours</i> : null}
               {m.has_packets || m.has_readings ? null : <i className="w-nodata">no data</i>}
             </button>
           ))}

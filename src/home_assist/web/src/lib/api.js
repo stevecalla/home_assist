@@ -67,6 +67,8 @@ export const api = {
   waterReception: (minutes, meter) => jget('/api/water/reception?minutes=' + (minutes || 60) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterMeter: (q) => jget('/api/water/meter?' + new URLSearchParams(q).toString()),
   waterPackets: (q) => jget('/api/water/packets?' + new URLSearchParams(q).toString()),
+  adminMeterAccess: () => jget('/api/admin/meter-access'),
+  adminSetMeterAccess: (patch) => jpost('/api/admin/meter-access', patch),
   waterMeters: () => jget('/api/water/meters'),
   waterSaveMeter: (id, patch) => jpost('/api/water/meters/' + encodeURIComponent(id), patch),
   waterTestMeterEmail: (id) => jpost('/api/water/meters/' + encodeURIComponent(id) + '/test', {}),

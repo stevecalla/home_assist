@@ -14,7 +14,7 @@ import './water.css';
 // can be switched on at all — otherwise its alerts would fall through to the global list and start
 // arriving in your inbox at 3am, which nobody would guess had been configured.
 
-function Row({ m, ownEmail, emailEnabled, onSaved }) {
+function Row({ m, yours, ownEmail, emailEnabled, onSaved }) {
   const [name, setName] = useState(m.meter_name || '');
   const [notify, setNotify] = useState(!!m.notify);
   const [email, setEmail] = useState(m.notify_email || '');
@@ -78,6 +78,13 @@ function Row({ m, ownEmail, emailEnabled, onSaved }) {
           : <span className={'w-own ' + (m.notify ? 'alerting' : 'observed')}>
               {m.notify ? 'alerting' : 'observed'}
             </span>}
+        {/* Two different facts, so two different words. "mine" is the COLLECTOR's meter — a fact
+            about the radio, identical for everyone. "yours" is the meter "This meter" lands on for
+            the person reading this — a fact about their access. They coincide unless someone has
+            been restricted, which is exactly when saying only "mine" would mislead. */}
+        {yours && !m.owned
+          ? <span className="w-own yours" title="“This meter” resolves here for you">yours</span>
+          : null}
         {m.model ? <span className="muted small">{m.model}</span> : null}
         <span className="muted small">
           {m.packets_seen.toLocaleString()} packets
@@ -186,6 +193,7 @@ export default function Meters() {
         <Row
           key={m.meter_id}
           m={m}
+          yours={String(m.meter_id) === String(data.own_meter_id)}
           ownEmail={data.default_email_to}
           emailEnabled={data.email_enabled}
           onSaved={(meters) => setData((d) => ({ ...d, meters }))}

@@ -535,6 +535,34 @@ is what keeps seven checkboxes from being tedious.
 
 279 tests pass, 58/58 files parse, SPA builds clean.
 
+## Per-user meter access (2026-08-23)
+
+Panel access answered *which pages you can open*. It could not answer *whose data those pages show*,
+so "give the neighbour a login for their own meter" was not expressible: they would have got the
+Monitor page pointed at this house.
+
+`access/meter_access.js` is the sibling of `panel_access.js` — same shape (`get / set_default /
+set_user / clear_user / allowed / is_allowed`), same JSON-outside-the-repo storage, same
+admin-always-sees-everything rule. It defaults to `'all'`, so an install that never touches it
+behaves exactly as it did before; there is no migration.
+
+| Change | Detail |
+|---|---|
+| **`primary(user, role, fallback)`** | The change that makes it real rather than cosmetic. `mine` used to mean *the collector's meter* — one global id. Restrict someone to a neighbour's meter under that rule and `mine` still handed them this house's data, i.e. the exact thing the restriction was for. It now resolves per user, preferring the collector's meter when the grant includes it |
+| **`resolve_meter(raw, cfg, req)` returns `null` for a refused id** | And every call site answers `403`. The tempting alternative — return an empty result set — reads on a leak monitor as *no water used*, which is a statement, not an absence |
+| **`scope:'all'` is an `IN` list, never "no WHERE clause"** | The store layer used to omit the clause entirely for `all`, so the Real time tab was a way to walk straight around the restriction. An empty grant becomes `AND 1 = 0` — the fix that "just drop the clause" would have inverted into *sees everything* |
+| **`other_ids` filtered** | The per-minute "also hearing" list is data about meters you may not hold. A permission that holds on the main table and not on a sidebar is not a permission |
+| **Write endpoints gated too** | `POST /meters/:id` and `/:id/test`. The panel says you may edit meters; the grant says which ones. Panel-only would let someone set the 3am alert address on a meter they cannot see |
+| **Picker + alert list filtered** | Cosmetic on their own — the endpoints enforce — but a dropdown offering a meter that 403s is a broken app, not a secure one |
+| **Admin page: two new cards** | *Meter access — general default* and *— per user*, mirroring the panel cards, sharing the user picker. The per-user summary now answers both questions at once: **pages:** … / **meters:** … |
+| **`yours` beside `mine`** | Two different facts needed two different words. `mine` is the collector's meter — a property of the radio, identical for everyone. `yours` is where "This meter" lands for the person reading. They coincide unless someone is restricted, which is precisely when one word for both would mislead |
+
+Grants may name a meter the radio has not heard yet (one about to be installed), so validation is
+shape-only and the admin grid keeps showing an unheard id — dropping it would make the next save,
+built from that grid, silently delete it.
+
+305 tests pass, 60/60 files parse, SPA builds clean.
+
 ## Open items
 
 1. **Tune `overnight_threshold_gal`.** Currently 3 gal, which is a guess. An ice maker, a

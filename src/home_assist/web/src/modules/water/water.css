@@ -674,6 +674,7 @@
 .w-pick-menu button.on { background: var(--w-good); color: #fff; }
 .w-pick-menu button:disabled { opacity: .45; cursor: default; }
 .w-pick-menu .w-mine,
+.w-pick-menu .w-yours,
 .w-pick-menu .w-nodata {
   margin-left: auto; font-style: normal; font-size: 10px; opacity: .7; text-transform: uppercase;
   letter-spacing: .04em;
@@ -903,6 +904,9 @@ th.w-grid-num { padding: 6px 8px; }
   border: 1px solid currentColor;
 }
 .w-own.mine      { color: var(--w-good); }
+/* "yours" is about ACCESS, "mine" is about the radio. Different question, different hue -- an
+   identical green would read as the same badge said twice. */
+.w-own.yours     { color: var(--w-series, #2a78d6); }
 .w-own.observed  { color: var(--w-axis); }
 /* An observed meter that is allowed to email you. The one surprising configuration in the app, so
    it gets its own word rather than hiding inside "observed". */
