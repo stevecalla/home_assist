@@ -68,13 +68,13 @@ export default function Reference() {
         forceKey={force.key}
         actions={<Link className="muted small" to="/water/settings">Change these →</Link>}
       >
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           The collector re-evaluates every rule <strong>every {ref.tick_seconds} seconds</strong>, in{' '}
           {ref.tz} local time. A <strong>cooldown</strong> is the minimum gap before the same alert can
           repeat — it exists so a leak that runs all weekend does not send you 400 emails, which is how
           people end up muting the thing that was trying to help.
         </p>
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           <strong>Detection and delivery are separate.</strong> These rules run over{' '}
           <em>every</em> meter the receiver stores readings for, and the results are recorded so any
           meter&apos;s history and banner work. Only a meter marked <code>notify</code> is actually
@@ -121,7 +121,7 @@ export default function Reference() {
         forceKey={force.key}
         actions={<Link className="muted small" to="/water/diagnostics">Verify SMTP →</Link>}
       >
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           An alert that cannot be delivered is not an alert. Both channels record whether delivery
           actually succeeded — <em>raised</em> and <em>delivered</em> are different facts, and the{' '}
           <Link to="/water/alerts">Alerts</Link> page shows both.
@@ -145,7 +145,7 @@ export default function Reference() {
 
       {/* ── the thing that trips everyone up ─────────────────────────────────────── */}
       <CollapsibleCard title="Two processes, one app" defaultOpen={false} forceOpen={force.open} forceKey={force.key}>
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           These are separate on purpose: rebuilding or restarting the dashboard must never interrupt
           leak detection.
         </p>
@@ -166,7 +166,7 @@ export default function Reference() {
             </tr>
           </tbody>
         </table>
-        <p className="w-chart-sub small" style={{ marginTop: 10 }}>
+        <p className="ha-card-sub small" style={{ marginTop: 10 }}>
           Port <strong>5176</strong> is the Vite dev server and only runs during development. In normal
           use everything is on <strong>8050</strong>. They cannot both run — pm2 holds the port.
         </p>
@@ -213,7 +213,7 @@ export default function Reference() {
         forceKey={force.key}
         actions={<Link className="muted small" to="/water/monitor">Open the Monitor →</Link>}
       >
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           Three tabs on the meter card, each one rung coarser and one rung longer than the last.
           Nothing overlaps, and no tab is doing another&apos;s job.
         </p>
@@ -244,8 +244,8 @@ export default function Reference() {
           </tbody>
         </table>
 
-        <p className="w-chart-sub" style={{ marginTop: 12, fontWeight: 700 }}>Signal strength, in words</p>
-        <p className="w-chart-sub small">
+        <p className="ha-card-sub" style={{ marginTop: 12, fontWeight: 700 }}>Signal strength, in words</p>
+        <p className="ha-card-sub small">
           <strong>SNR is the one that matters.</strong> It is how far the signal sits above the
           background noise, and it — not raw power — predicts whether a packet decodes. RSSI is here
           because read next to <code>noise</code> it separates &ldquo;the meter is far away&rdquo;
@@ -270,7 +270,7 @@ export default function Reference() {
           </table>
         ) : null}
 
-        <p className="w-chart-sub" style={{ marginTop: 12, fontWeight: 700 }}>Gaps, and what they tell you</p>
+        <p className="ha-card-sub" style={{ marginTop: 12, fontWeight: 700 }}>Gaps, and what they tell you</p>
         <table className="w-table">
           <thead><tr><th>What you see</th><th>It means</th></tr></thead>
           <tbody>
@@ -304,7 +304,7 @@ export default function Reference() {
 
         {ref.packet_columns ? (
           <>
-            <p className="w-chart-sub" style={{ marginTop: 12, fontWeight: 700 }}>Every column in the table</p>
+            <p className="ha-card-sub" style={{ marginTop: 12, fontWeight: 700 }}>Every column in the table</p>
             <table className="w-table">
               <thead><tr><th>Column</th><th>Means</th></tr></thead>
               <tbody>
@@ -332,7 +332,7 @@ export default function Reference() {
         forceKey={force.key}
         actions={<Link className="muted small" to="/water/settings">Change these →</Link>}
       >
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           Each table stores one <em>level</em> of detail, and each level is either bounded by a prune
           or small enough that it never needs one. The radio hears the meter roughly every 4 seconds —
           about <strong>780,000 packets a year</strong> — and none of them is stored as a row. What
@@ -413,7 +413,7 @@ export default function Reference() {
             </tr>
           </tbody>
         </table>
-        <p className="w-chart-sub small" style={{ marginTop: 10 }}>
+        <p className="ha-card-sub small" style={{ marginTop: 10 }}>
           <strong>Two tables grow on a timer rather than on usage</strong> — <code>water_packets</code>
           and <code>water_reception</code>. Both have hard, always-on prunes, which is what keeps
           the total flat: <code>water_packets</code> settles around 2 MB a day held, and{' '}
@@ -423,7 +423,7 @@ export default function Reference() {
           growing; the long view reads <code>water_hourly</code> instead, which is why history past
           two weeks costs nothing.
         </p>
-        <p className="w-chart-sub small" style={{ marginTop: 6 }}>
+        <p className="ha-card-sub small" style={{ marginTop: 6 }}>
           <strong>The hourly rollup has a floor.</strong> It is the table every chart and every leak
           rule reads, so a short retention there does not just cost detail — it stops the monitor
           being able to detect things. The continuous-flow rule needs six consecutive hours, the
@@ -459,7 +459,7 @@ export default function Reference() {
             <tr><td>Wipe meter history, keep settings</td><td><code>npm run water_reset</code> <span className="muted small">(dry run first)</span></td></tr>
           </tbody>
         </table>
-        <p className="w-chart-sub small" style={{ marginTop: 10 }}>
+        <p className="ha-card-sub small" style={{ marginTop: 10 }}>
           The collector logs a proof-of-life line every 5 minutes — <code>radio ok — N packets in 5m</code>.
           Without it a silent log means either “nobody used water” or “the process died”, and you
           cannot tell which.

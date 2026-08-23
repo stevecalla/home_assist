@@ -172,7 +172,7 @@ export default function Alerts() {
           </p>
         </div>
       ) : (
-        <div className="w-chart-card">
+        <div className="ha-card">
           <table className="w-table stack">
             <thead>
               <tr>

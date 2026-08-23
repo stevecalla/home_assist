@@ -733,7 +733,7 @@ export default function Monitor() {
                   : 'Waiting for the first transmission…'}
                 maxHeight={420}
               />
-              <p className="w-chart-sub small" style={{ marginTop: 8 }}>
+              <p className="ha-card-sub small" style={{ marginTop: 8 }}>
                 Newest first. <b>Hover any column heading</b> for what it means and what a good value
                 looks like. A blank <code>delta</code> is the normal case — the meter re-broadcasts
                 the same total every few seconds and only steps when a whole gallon has passed.
@@ -761,7 +761,7 @@ export default function Monitor() {
               </div>
               {rt && rt.gaps && rt.gaps.length ? (
                 <>
-                  <p className="w-chart-sub" style={{ marginTop: 10, fontWeight: 700 }}>Gaps in this window</p>
+                  <p className="ha-card-sub" style={{ marginTop: 10, fontWeight: 700 }}>Gaps in this window</p>
                   <table className="w-table">
                     <thead><tr><th>started</th><th>length</th><th>missed</th><th>snr before</th><th>snr after</th><th>reading</th></tr></thead>
                     <tbody>
@@ -786,7 +786,7 @@ export default function Monitor() {
               ) : null}
               {rt && rt.meters && rt.meters.length > 1 ? (
                 <>
-                  <p className="w-chart-sub" style={{ marginTop: 10, fontWeight: 700 }}>Meters heard</p>
+                  <p className="ha-card-sub" style={{ marginTop: 10, fontWeight: 700 }}>Meters heard</p>
                   <table className="w-table">
                     <thead><tr><th>id</th><th></th><th>packets</th><th>decoded</th><th>rssi avg</th><th>snr avg</th><th>last seen</th></tr></thead>
                     <tbody>
@@ -1057,7 +1057,7 @@ function DataTable({ headers, rows, note }) {
   const body = (rows || []).slice(-500);
   return (
     <div className="w-datatable">
-      {note ? <p className="w-chart-sub small">{note}</p> : null}
+      {note ? <p className="ha-card-sub small">{note}</p> : null}
       <div className="w-datatable-scroll">
         <table className="w-table">
           <thead><tr>{headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>

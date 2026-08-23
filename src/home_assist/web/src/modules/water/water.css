@@ -97,24 +97,9 @@
 
 /* ── charts ────────────────────────────────────────────────────────────── */
 
-.w-chart-card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 16px 18px 10px;
-  box-shadow: var(--shadow);
-  margin-bottom: 18px;
-}
-.w-chart-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
-  flex-wrap: wrap;
-}
-.w-chart-title { font-size: 15px; font-weight: 700; margin: 0; }
-.w-chart-sub { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+/* The card shell (.ha-card and friends) lives in styles.css — it was never water-specific, it was
+   just written here because water happened to be its only user. What stays below is genuinely
+   water's: the SVG chart internals, the bars, the axis, the tooltip. */
 
 .w-chart { position: relative; width: 100%; }
 .w-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
@@ -243,7 +228,7 @@
   .w-tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
   .w-tile-value { font-size: 22px; }
 
-  .w-chart-card { padding: 13px 13px 8px; }
+  .ha-card { padding: 13px 13px 8px; }
   .w-strip { gap: 10px 16px; }
 }
 
@@ -324,8 +309,8 @@
 .w-tile-value { font-size: 20px; }
 .w-tile-note  { font-size: 11px; margin-top: 2px; }
 
-.w-chart-card { padding: 13px 16px 8px; margin-bottom: 14px; }
-.w-chart-sub  { margin-top: 2px; margin-bottom: 8px; }
+.ha-card { padding: 13px 16px 8px; margin-bottom: 14px; }
+.ha-card-sub  { margin-top: 2px; margin-bottom: 8px; }
 
 /* Progressive disclosure: the "why" is one click away instead of three lines tall. */
 .w-inline-note { display: inline; }
@@ -377,24 +362,7 @@
   border: 1px solid var(--w-grid); cursor: help;
 }
 
-/* ── collapsible cards (usat_apps CollapsibleCard) ───────────────────────────
-   The caret and the title are one button so the hit target is the whole title,
-   not a 14px glyph. Actions in the header stop propagation, so an export or a
-   "Change these" link never collapses the card out from under the click. */
-.w-card-toggle {
-  display: flex; align-items: baseline; gap: 8px;
-  border: 0; background: transparent; padding: 0; margin: 0;
-  font: inherit; color: inherit; cursor: pointer; text-align: left;
-}
-.w-card-toggle:hover .w-chart-title { text-decoration: underline; text-underline-offset: 3px; }
-.w-card-toggle:focus-visible { outline: 2px solid var(--w-series); outline-offset: 3px; border-radius: 4px; }
-.w-card-caret { color: var(--w-axis); font-size: 11px; width: 12px; flex: none; }
-
-.w-card-actions { margin-left: auto; }
-
-/* A collapsed card is just its header — no dead padding under the title. */
-.w-chart-card.is-collapsed { padding-bottom: 12px; }
-.w-chart-card.is-collapsed .w-chart-head { margin-bottom: 0; }
+/* The collapsible-card rules moved to styles.css — see the note above. */
 
 .w-card-bar { display: flex; gap: 8px; margin: 0 0 12px; }
 .btn.small { padding: 3px 10px; font-size: 12px; }

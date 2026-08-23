@@ -175,7 +175,7 @@ export default function Meters() {
       </p>
 
       {!data.email_enabled ? (
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           <b>Email alerts are switched off</b> for the whole module, so nothing below will send
           regardless of these settings. Turn it on in{' '}
           <Link to="/water/settings#alert_email_enabled">Settings → Alerts</Link>.

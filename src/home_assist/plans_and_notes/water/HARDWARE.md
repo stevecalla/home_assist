@@ -37,15 +37,21 @@ to find the id was a hose test — run water, watch which decoded id's volume mo
 A neighbour has a newer frequency-hopping Orion, id `40462356`, model `Orion-Endpoint`. If a capture
 shows that id, it is not ours.
 
-> **CONFIRMED against rtl_433 master, 2026-08-16.** The numbers are right; the *build* was the
-> problem. `conf/rtl_433.example.conf` on master lists:
+> **Provenance, 2026-08-16.** This is not a guess and not a note copied from the internet — the id
+> and the model string came from an actual decode during the first RTL-SDR testing, on the **Windows
+> laptop**, using the `rtl_433-win-x64-nightly` build. See `PROJECTHISTORY.md`.
 >
-> - `[282]  Orion Endpoint from Badger Meter, GIF2014W-OSE, water meter, hopping from 904.4 MHz to 924.6 MHz`
-> - `[290]  Orion Endpoint from Badger Meter, GIF2020OCECNA, water meter, hopping from 904.4 MHz to 924.6 MHz`
+> It then disappeared for a reason that had nothing to do with radio: the Ubuntu box ran the **apt
+> build, rtl_433 23.11**, whose protocol list stops at `[250]`. 282 and 290 did not exist in it, so
+> the endpoint became undecodable on the production machine while remaining perfectly audible.
+> Confirmed against master, which reaches `[337]`:
 >
-> The Latitude runs **rtl_433 23.11 (2023-11-28)**, whose protocol list stops at `[250]` — so 282
-> and 290 do not exist there in any form, Orion or otherwise. Master reaches `[337]`. Building from
-> source is what unlocks these, and nothing else will.
+> - `[282]  Orion Endpoint from Badger Meter, GIF2014W-OSE,  hopping from 904.4 MHz to 924.6 MHz  (-s 1600k)`
+> - `[290]  Orion Endpoint from Badger Meter, GIF2020OCECNA, hopping from 904.4 MHz to 924.6 MHz  (-s 1600k)`
+>
+> The Latitude now runs a source build (25.12) and has all three decoders. **The lesson worth
+> keeping: "the app stopped seeing it" was a package-version problem wearing a reception problem's
+> clothes.** Check `rtl_433 -V` and the protocol list before blaming an antenna.
 
 ### Decoder
 

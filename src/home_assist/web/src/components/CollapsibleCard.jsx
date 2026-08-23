@@ -26,23 +26,23 @@ export default function CollapsibleCard({
   }, [forceKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className={'w-chart-card' + (open ? '' : ' is-collapsed')} style={style}>
-      <div className="w-chart-head">
+    <div className={'ha-card' + (open ? '' : ' is-collapsed')} style={style}>
+      <div className="ha-card-head">
         <button
           type="button"
-          className="w-card-toggle"
+          className="ha-card-toggle"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
           title={open ? 'Collapse' : 'Expand'}
         >
-          <span className="w-card-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
-          <span className="w-chart-title">{title}</span>
+          <span className="ha-card-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          <span className="ha-card-title">{title}</span>
         </button>
         {actions ? (
-          <span className="w-card-actions" onClick={(e) => e.stopPropagation()}>{actions}</span>
+          <span className="ha-card-actions" onClick={(e) => e.stopPropagation()}>{actions}</span>
         ) : null}
       </div>
-      {open && sub ? <p className="w-chart-sub">{sub}</p> : null}
+      {open && sub ? <p className="ha-card-sub">{sub}</p> : null}
       {open ? children : null}
     </div>
   );

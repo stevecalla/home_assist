@@ -2,10 +2,22 @@
 /**
  * api.js — /api/water/* — everything the dashboard reads.
  *
- * Read-only with respect to the meter. The only writes here are settings changes and the manual
- * test alert, both gated behind the 'water-admin' panel.
+ * Read-only with respect to the meter. The only writes are settings changes, meter edits and the
+ * manual test alert.
+ *
+ * Every route is gated on the panel for the PAGE THAT CALLS IT, one panel per page. Where an
+ * endpoint genuinely serves two pages it uses require_any_panel — see ANY_WATER below.
  */
-const { require_panel } = require('../../auth/require_auth');
+const { require_panel, require_any_panel } = require('../../auth/require_auth');
+
+/**
+ * Every water panel that grants READ access to some page. Used by the endpoints that feed a control
+ * appearing on more than one page -- the meter picker sits on Monitor, History, Diagnostics and
+ * Alerts, so gating its data on any single one of those would give a user an empty dropdown on a
+ * page they are entitled to see.
+ */
+const ANY_WATER = ['water-monitor', 'water-history', 'water-alerts', 'water-reference',
+  'water-settings', 'water-meters', 'water-diagnostics'];
 const time = require('../../time');
 const db = require('../../store/db');
 const schema = require('../../store/schema');
@@ -61,7 +73,7 @@ function keys_for_today(now, tz) {
 
 function mount(app) {
   // ── the dashboard's heartbeat: everything the top of the page needs, in one call ──
-  app.get('/api/water/status', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/status', require_any_panel(['water-monitor', 'water-history']), guard(async function (req, res) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
@@ -158,7 +170,7 @@ function mount(app) {
   // ── reference: the alert schedule and the operational facts, rendered from the same source the
   //    rules use. Panel 'water' (not water-admin) — knowing when you WILL be woken is not an
   //    administrative privilege, and a reference page nobody can reach documents nothing.
-  app.get('/api/water/reference', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/reference', require_panel('water-reference'), guard(async function (req, res) {
     const cfg = await settings.all();
     const described = settings.describe(cfg);
     const by_name = {};
@@ -206,7 +218,7 @@ function mount(app) {
   //
   // One endpoint rather than two so the card can switch modes without the UI having to know which
   // table backs which mode — and so `sql` below can always describe what was actually run.
-  app.get('/api/water/meter', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/meter', require_panel('water-monitor'), guard(async function (req, res) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
@@ -287,7 +299,7 @@ function mount(app) {
   //
   // One row per decoded transmission. `meter=all` is a DISPLAY filter — what gets captured is
   // decided by packets_capture_all_meters in settings, not by this query string.
-  app.get('/api/water/packets', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/packets', require_panel('water-monitor'), guard(async function (req, res) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
@@ -404,7 +416,7 @@ function mount(app) {
   // Panel 'water', not 'water-admin': choosing which meter you are looking at is not an
   // administrative act. Served from water_meters rather than derived from water_packets, because
   // packets are pruned within a day and a dropdown whose options vanish overnight reads as a bug.
-  app.get('/api/water/meters', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/meters', require_any_panel(ANY_WATER), guard(async function (req, res) {
     const cfg = await settings.all();
     const list = await meters.list();
     res.json({
@@ -423,7 +435,7 @@ function mount(app) {
   //
   // water-admin, not water: choosing which meter you LOOK at is not administrative, but deciding
   // which meter is allowed to email you at 3am certainly is.
-  app.post('/api/water/meters/:id', require_panel('water-admin'), guard(async function (req, res) {
+  app.post('/api/water/meters/:id', require_panel('water-meters'), guard(async function (req, res) {
     const cfg = await settings.all();
     const r = await meters.update(req.params.id, req.body || {}, cfg.meter_id);
     if (!r.ok) return res.status(400).json(r);
@@ -432,7 +444,7 @@ function mount(app) {
 
   // Prove the address works BEFORE a leak has to. A per-meter test send, using exactly the same
   // resolution the collector will use -- the meter's own list if it has one, otherwise the global.
-  app.post('/api/water/meters/:id/test', require_panel('water-admin'), guard(async function (req, res) {
+  app.post('/api/water/meters/:id/test', require_panel('water-meters'), guard(async function (req, res) {
     const cfg = await settings.all();
     const id = Number(req.params.id) || 0;
     const list = await meters.list();
@@ -457,7 +469,7 @@ function mount(app) {
   }));
 
   // ── reception: the persistent "is the radio hearing my meter" record ──
-  app.get('/api/water/reception', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/reception', require_panel('water-diagnostics'), guard(async function (req, res) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg);
     const minutes = Math.max(5, Math.min(Number(req.query.minutes) || 60, 1440));
@@ -497,7 +509,7 @@ function mount(app) {
   }));
 
   // ── charts ──
-  app.get('/api/water/hourly', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/hourly', require_any_panel(['water-monitor', 'water-history']), guard(async function (req, res) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg);
     const series = await readings.hourly_series(sel.meter_id, req.query.hours || 48);
@@ -510,7 +522,7 @@ function mount(app) {
     });
   }));
 
-  app.get('/api/water/daily', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/daily', require_panel('water-history'), guard(async function (req, res) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg);
     const series = await readings.daily_series(sel.meter_id, req.query.days || 30);
@@ -520,7 +532,7 @@ function mount(app) {
     });
   }));
 
-  app.get('/api/water/readings', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/readings', require_panel('water-diagnostics'), guard(async function (req, res) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg);
     res.json({
@@ -531,7 +543,7 @@ function mount(app) {
   }));
 
   // ── alert history ──
-  app.get('/api/water/alerts', require_panel('water'), guard(async function (req, res) {
+  app.get('/api/water/alerts', require_any_panel(['water-alerts', 'water-monitor']), guard(async function (req, res) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg);
     // 'all' means every meter's history in one list, which is genuinely useful here -- unlike a
@@ -562,7 +574,7 @@ function mount(app) {
   }));
 
   // ── settings (admin) ──
-  app.get('/api/water/settings', require_panel('water-admin'), guard(async function (req, res) {
+  app.get('/api/water/settings', require_panel('water-settings'), guard(async function (req, res) {
     const values = await settings.all({ force: true });
     res.json({
       ok: true,
@@ -572,24 +584,24 @@ function mount(app) {
     });
   }));
 
-  app.post('/api/water/settings', require_panel('water-admin'), guard(async function (req, res) {
+  app.post('/api/water/settings', require_panel('water-settings'), guard(async function (req, res) {
     await schema.ensure_schema(db);
     const values = await settings.set_many(req.body || {}, req.user);
     res.json({ ok: true, settings: settings.describe(values) });
   }));
 
-  app.post('/api/water/test-alert', require_panel('water-admin'), guard(async function (req, res) {
+  app.post('/api/water/test-alert', require_panel('water-settings'), guard(async function (req, res) {
     const cfg = await settings.all({ force: true });
     const r = await alerts.send_test(cfg, req.user);
     res.json({ ok: true, result: r });
   }));
 
-  app.get('/api/water/email-check', require_panel('water-admin'), guard(async function (req, res) {
+  app.get('/api/water/email-check', require_panel('water-diagnostics'), guard(async function (req, res) {
     res.json({ ok: true, email: await mailer.verify(), config: { sender: mailer.config().sender, host: mailer.config().host, port: mailer.config().port } });
   }));
 
   // ── diagnostics: the raw decoder lines, for "are the field names what we think?" ──
-  app.get('/api/water/raw', require_panel('water-admin'), guard(async function (req, res) {
+  app.get('/api/water/raw', require_panel('water-diagnostics'), guard(async function (req, res) {
     // seen_at_mtn as well as _utc. This endpoint returned only UTC and the Diagnostics table
     // rendered it under a "Seen (UTC)" heading — honestly labelled, but it made this the one table
     // in the app on a different clock from every other. Comparing a raw line against a pm2 log or

@@ -62,9 +62,9 @@ export default function History() {
         <MeterPicker sel={sel} setSel={setSel} ownId={hourly ? hourly.own_meter_id : null} allowAll={false} />
       </div>
 
-      <div className="w-chart-card">
-        <div className="w-chart-head">
-          <h3 className="w-chart-title">Gallons per hour</h3>
+      <div className="ha-card">
+        <div className="ha-card-head">
+          <h3 className="ha-card-title">Gallons per hour</h3>
           {/* Filters in one row above the chart. */}
           <span>
             {HOUR_RANGES.map((h) => (
@@ -83,7 +83,7 @@ export default function History() {
             </button>
           </span>
         </div>
-        <p className="w-chart-sub">Shaded = the overnight window ({win[0]}:00–{win[1]}:00).</p>
+        <p className="ha-card-sub">Shaded = the overnight window ({win[0]}:00–{win[1]}:00).</p>
 
         {table ? (
           <div style={{ maxHeight: 420, overflow: 'auto' }}>
@@ -117,9 +117,9 @@ export default function History() {
         )}
       </div>
 
-      <div className="w-chart-card">
-        <div className="w-chart-head">
-          <h3 className="w-chart-title">Gallons per day</h3>
+      <div className="ha-card">
+        <div className="ha-card-head">
+          <h3 className="ha-card-title">Gallons per day</h3>
           <span>
             {DAY_RANGES.map((d) => (
               <button
@@ -134,7 +134,7 @@ export default function History() {
             ))}
           </span>
         </div>
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           A slow leak is easiest to see here: the daily floor creeps up and never comes back down.
         </p>
         <BarChart
