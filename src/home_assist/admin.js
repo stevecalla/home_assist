@@ -36,6 +36,10 @@ async function main() {
     console.log('data dir  : ' + d.app_data + (d.overridden ? '   [HOMEASSIST_DATA_DIR]' : ''));
     console.log('  auth.json          ' + data_dir.file_sync('auth.json'));
     console.log('  panel_access.json  ' + data_dir.file_sync('panel_access.json'));
+    // The two access files answer different questions -- which PAGES, and whose DATA -- and both
+    // live here. Listing only one is how you go looking for a grant file that the app never told
+    // you the location of.
+    console.log('  meter_access.json  ' + data_dir.file_sync('meter_access.json'));
     console.log('  captures/          ' + data_dir.file_sync('captures'));
     console.log('\nresolved by utilities/directory_tools/determine_os_path.js');
     if (process.platform === 'win32') {
