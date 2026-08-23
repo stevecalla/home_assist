@@ -839,3 +839,54 @@ table.grid td {
   code { word-break: break-word; }
   .footer-src { display: none; }
 }
+
+
+/* ── card shell + CollapsibleCard ─────────────────────────────────────────────
+   The standard card: a bordered, shadowed panel with an optional collapse toggle. Used by the water
+   pages and by Admin, and available to any module.
+
+   `ha-` = home_assist, i.e. the platform. A module prefixes its own classes with its module id
+   (water uses `w-`) so module styles can never leak; anything shared belongs here instead. These
+   rules lived in water.css for a while purely because water was their only consumer, which quietly
+   made a "shared" component usable by exactly one module.
+
+   The two colour tokens carry fallbacks: --w-series / --w-axis are defined on .w-root, and these
+   rules render outside it on any non-water page. */
+.ha-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px 10px;
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+}
+.ha-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.ha-card-title { font-size: 15px; font-weight: 700; margin: 0; }
+.ha-card-sub { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+
+/* The caret and the title are one button so the hit target is the whole title, not a 14px glyph.
+   Actions in the header stop propagation, so an export or a "Change these" link never collapses the
+   card out from under the click. */
+.ha-card-toggle {
+  display: flex; align-items: baseline; gap: 8px;
+  border: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.ha-card-toggle:hover .ha-card-title { text-decoration: underline; text-underline-offset: 3px; }
+.ha-card-toggle:focus-visible {
+  outline: 2px solid var(--w-series, #2a78d6); outline-offset: 3px; border-radius: 4px;
+}
+.ha-card-caret { color: var(--w-axis, var(--muted)); font-size: 11px; width: 12px; flex: none; }
+
+.ha-card-actions { margin-left: auto; }
+
+/* A collapsed card is just its header — no dead padding under the title. */
+.ha-card.is-collapsed { padding-bottom: 12px; }
+.ha-card.is-collapsed .ha-card-head { margin-bottom: 0; }

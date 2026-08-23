@@ -44,4 +44,31 @@ function require_panel(panel) {
   };
 }
 
-module.exports = { require_auth, require_admin, require_panel, payload };
+/**
+ * Allow the request if the user holds ANY of these panels.
+ *
+ * Needed because some endpoints genuinely serve more than one page: /api/water/hourly draws the
+ * card on Monitor AND the chart on History, and /api/water/meters populates the meter picker that
+ * appears on four different pages. Gating those on a single key would 403 a user who legitimately
+ * has one of the pages but not the other -- a page that loads with an empty dropdown and no
+ * explanation.
+ *
+ * The rule stays least-privilege: holding one of the listed panels is the same right the single-key
+ * version grants, not a wider one.
+ */
+function require_any_panel(panels) {
+  const list = Array.isArray(panels) ? panels : [panels];
+  return function (req, res, next) {
+    const p = payload(req);
+    if (!p) return res.status(401).json({ ok: false, error: 'authentication required' });
+    const role = p.role || 'user';
+    const ok = list.some(function (k) { return panel_access.is_allowed(p.user, role, k); });
+    if (!ok) return res.status(403).json({ ok: false, error: 'access to this panel is restricted' });
+    req.user = p.user;
+    req.role = role;
+    session.refresh(res, p, store.session_secret());
+    next();
+  };
+}
+
+module.exports = { require_auth, require_admin, require_panel, require_any_panel, payload };

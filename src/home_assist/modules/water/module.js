@@ -36,9 +36,23 @@ module.exports = {
   id: 'water',
   label: 'Water',
   group: 'Water',
+  // ONE PANEL PER PAGE.
+  //
+  // This used to be two: `water` and `water-admin`. Two labels stopped describing seven pages --
+  // "Water settings" had quietly come to include the Meters page, which is where you decide which
+  // meters are allowed to email whom. A permission whose label understates what it grants is the
+  // kind of thing nobody notices until it matters.
+  //
+  // Order matters: the Admin page renders the catalog in this order under one "Water" group with a
+  // select-all, so read-only pages come first and the three that change things come last.
   panels: [
-    { key: 'water', label: 'Water monitor', group: 'Water' },
-    { key: 'water-admin', label: 'Water settings', group: 'Water' },
+    { key: 'water-monitor', label: 'Monitor — live status + meter card', group: 'Water' },
+    { key: 'water-history', label: 'History — hourly + daily charts', group: 'Water' },
+    { key: 'water-alerts', label: 'Alerts — the alert history', group: 'Water' },
+    { key: 'water-reference', label: 'Reference — what each rule does', group: 'Water' },
+    { key: 'water-settings', label: 'Settings — thresholds + email (changes behaviour)', group: 'Water' },
+    { key: 'water-meters', label: 'Meters — names, scale, WHO GETS EMAILED', group: 'Water' },
+    { key: 'water-diagnostics', label: 'Diagnostics — raw decoder feed + SMTP check', group: 'Water' },
   ],
   metricsTable: null,     // reserved; no usage-analytics stack in v1
   mount: function (app) { api.mount(app); },

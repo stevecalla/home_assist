@@ -506,7 +506,34 @@ carry two different names with nothing to say which won, and the editable one wa
 What stays banned is a *generated* name. An auto-name that only restates the badge beside it says
 the same thing twice and hides the number.
 
-272 tests pass, 58/58 files parse, SPA builds clean.
+### Pass D -- one panel per page
+
+Access was two coarse panels covering seven pages, and the labels had stopped telling the truth:
+"Water settings" had quietly come to include the **Meters** page, which is where you decide which
+meters are allowed to email whom. A permission whose label understates what it grants is the kind of
+thing nobody notices until it matters.
+
+| Panel | Page |
+|---|---|
+| `water-monitor` | Monitor |
+| `water-history` | History |
+| `water-alerts` | Alerts |
+| `water-reference` | Reference |
+| `water-settings` | Settings — thresholds + email |
+| `water-meters` | Meters — **who gets emailed** |
+| `water-diagnostics` | Diagnostics — raw feed + SMTP check |
+
+| Change | Detail |
+|---|---|
+| **`LEGACY_PANELS` expansion** | `normalize()` filters unknown keys, so a stored `['water']` would have become `[]` — a **silent lockout**, found only when someone said the app went blank. Retired keys now expand to the panels they used to cover, deduplicated, on read. The file is rewritten only when an admin next saves that user, so a rollback still finds a file it understands |
+| **`require_any_panel()`** | Some endpoints genuinely serve two pages — `/hourly` draws the Monitor card *and* the History chart; `/meters` feeds the picker on four pages. Gating those on one key would 403 a user who holds the other page |
+| **Every route re-gated on the page that calls it** | One panel per page means nothing if the routes don't follow: a page you cannot open is still reachable by URL if its endpoint is gated on a panel you happen to hold. Pinned by test |
+| **`DEFAULT_ALL_EXCLUDE`** now the three that change things | Settings, Meters, Diagnostics. Reading the data is the default; altering who gets woken at 3am is not |
+
+All seven share the `Water` group, so the Admin page renders them under one **select-all** — which
+is what keeps seven checkboxes from being tedious.
+
+279 tests pass, 58/58 files parse, SPA builds clean.
 
 ## Open items
 

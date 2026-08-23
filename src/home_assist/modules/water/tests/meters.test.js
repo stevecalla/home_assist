@@ -53,13 +53,14 @@ test('the meter selector is a display filter, and says so', function () {
   assert.match(ui, /packets_capture_all_meters/, 'the comment that says this stores nothing stays');
 });
 
-test('the meters endpoint is readable by the water panel, not only admins', function () {
-  // Choosing which meter you are looking at is not an administrative act. A selector nobody can
-  // populate is a selector that does not work.
+test('the meters endpoint is readable from any water page, not only admins', function () {
+  // Choosing which meter you are looking at is not an administrative act. The picker appears on
+  // Monitor, History, Diagnostics AND Alerts, so gating its data on any single one of those would
+  // give a user an empty dropdown on a page they are entitled to see.
   const api = fs.readFileSync(require.resolve('../api'), 'utf8');
   const i = api.indexOf("app.get('/api/water/meters'");
   assert.ok(i !== -1, 'the endpoint must exist');
-  assert.match(api.slice(i, i + 120), /require_panel\('water'\)/);
+  assert.match(api.slice(i, i + 120), /require_any_panel\(ANY_WATER\)/);
 });
 
 test('every stat on the card follows the selected meter, not "is it mine"', function () {
@@ -419,15 +420,43 @@ test('a neighbour cannot be switched to notify without its own address', functio
   assert.match(body, /not an email address/);
 });
 
-test('editing a meter is water-admin; choosing one is not', function () {
+test('editing a meter needs the Meters panel; choosing one does not', function () {
   const api = fs.readFileSync(require.resolve('../api'), 'utf8');
   const get = api.indexOf("app.get('/api/water/meters'");
   const post = api.indexOf("app.post('/api/water/meters/:id'");
   assert.ok(get !== -1 && post !== -1);
-  assert.match(api.slice(get, get + 120), /require_panel\('water'\)/,
-    'populating the selector must not need admin');
-  assert.match(api.slice(post, post + 140), /require_panel\('water-admin'\)/,
-    'deciding which meter may email you at 3am must');
+  assert.match(api.slice(get, get + 120), /require_any_panel\(ANY_WATER\)/,
+    'populating the selector must not need a write permission');
+  assert.match(api.slice(post, post + 140), /require_panel\('water-meters'\)/,
+    'deciding which meter may email you at 3am must be its own grant');
+});
+
+test('every water route is gated on the page that calls it', function () {
+  // One panel per page only means anything if the ROUTES follow. A page someone cannot open is
+  // still reachable by URL if its endpoint is gated on a panel they happen to hold.
+  const api = fs.readFileSync(require.resolve('../api'), 'utf8');
+  const expect = {
+    "app.get('/api/water/reference'": "require_panel('water-reference')",
+    "app.get('/api/water/meter'": "require_panel('water-monitor')",
+    "app.get('/api/water/packets'": "require_panel('water-monitor')",
+    "app.get('/api/water/daily'": "require_panel('water-history')",
+    "app.get('/api/water/readings'": "require_panel('water-diagnostics')",
+    "app.get('/api/water/reception'": "require_panel('water-diagnostics')",
+    "app.get('/api/water/raw'": "require_panel('water-diagnostics')",
+    "app.get('/api/water/email-check'": "require_panel('water-diagnostics')",
+    "app.get('/api/water/settings'": "require_panel('water-settings')",
+    "app.post('/api/water/settings'": "require_panel('water-settings')",
+    "app.post('/api/water/test-alert'": "require_panel('water-settings')",
+  };
+  Object.keys(expect).forEach(function (route) {
+    const i = api.indexOf(route);
+    assert.ok(i !== -1, route + ' must exist');
+    assert.ok(api.slice(i, i + 160).indexOf(expect[route]) !== -1,
+      route + ' must be gated on ' + expect[route]);
+  });
+  // Nothing may still reference the retired coarse keys.
+  assert.ok(api.indexOf("require_panel('water')") === -1, 'the coarse water panel is retired');
+  assert.ok(api.indexOf("require_panel('water-admin')") === -1, 'the coarse water-admin panel is retired');
 });
 
 test('the per-meter test send uses the same resolution the collector will', function () {

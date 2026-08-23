@@ -109,7 +109,17 @@ module.exports = function mount(app) {
     try {
       const users = store.env_accounts().map(function (u) { return u.user; })
         .concat(store.list_users().map(function (u) { return u.user; }));
-      res.json({ ok: true, panels: panel_access.catalog(), access: panel_access.get(), users: users });
+      res.json({
+        ok: true,
+        panels: panel_access.catalog(),
+        access: panel_access.get(),
+        users: users,
+        // What "All panels" actually means. It is NOT every panel -- the sensitive ones are held
+        // back and need an explicit grant. The admin page renders the real resulting list rather
+        // than the words "all panels", because those two disagree and only one of them is true.
+        default_all_exclude: panel_access.DEFAULT_ALL_EXCLUDE,
+        not_grantable: panel_access.NOT_GRANTABLE,
+      });
     } catch (e) { res.status(500).json({ ok: false, error: (e && e.message) || String(e) }); }
   });
 

@@ -72,9 +72,9 @@ export default function Diagnostics() {
         <MeterPicker sel={sel} setSel={setSel} ownId={rx ? rx.own_meter_id : null} allowAll={false} />
       </div>
 
-      <div className="w-chart-card">
-        <div className="w-chart-head"><h3 className="w-chart-title">Email channel</h3></div>
-        <p className="w-chart-sub">
+      <div className="ha-card">
+        <div className="ha-card-head"><h3 className="ha-card-title">Email channel</h3></div>
+        <p className="ha-card-sub">
           Verifies the SMTP credentials without sending anything. A leak alert that cannot be
           delivered is not an alert.
         </p>
@@ -95,16 +95,16 @@ export default function Diagnostics() {
 
 
       {/* ── the live one ─────────────────────────────────────────────────────────── */}
-      <div className="w-chart-card">
-        <div className="w-chart-head">
-          <h3 className="w-chart-title">
+      <div className="ha-card">
+        <div className="ha-card-head">
+          <h3 className="ha-card-title">
             {selId !== null
               ? 'Reception — is the radio hearing ' + selId + '?'
               : 'Reception — is the radio hearing your meter?'}
           </h3>
           {rx ? <RxBadge seconds={rx.seconds_since_last} /> : null}
         </div>
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           One bar per minute, counting packets from{' '}
           <strong>{selId !== null ? 'meter ' + selId : 'your'}</strong>
           {selId !== null ? '' : ' meter'}. This is written to{' '}
@@ -141,15 +141,15 @@ export default function Diagnostics() {
         )}
       </div>
 
-      <div className="w-chart-card">
-        <div className="w-chart-head"><h3 className="w-chart-title">Raw decoder output</h3></div>
+      <div className="ha-card">
+        <div className="ha-card-head"><h3 className="ha-card-title">Raw decoder output</h3></div>
         {selId !== null ? (
-          <p className="w-chart-sub small muted">
+          <p className="ha-card-sub small muted">
             Not filtered by the meter selector — these are the undecoded lines from every endpoint,
             which is the whole point of this card.
           </p>
         ) : null}
-        <p className="w-chart-sub">
+        <p className="ha-card-sub">
           The actual packets your meter broadcast, exactly as the radio decoded them — <strong>real
           data, not test data</strong>. The collector keeps the first 20 of each run so you can check
           one thing: does every line contain <code>volume_gal</code>? That is the field
@@ -158,7 +158,7 @@ export default function Diagnostics() {
           us a night.
         </p>
         {raw && raw.length ? (
-          <p className="w-chart-sub small">
+          <p className="ha-card-sub small">
             {Object.entries(REASON)
               .filter(([k]) => raw.some((s) => s.reason === k))
               .map(([k, v]) => (
@@ -204,9 +204,9 @@ export default function Diagnostics() {
         )}
       </div>
 
-      <div className="w-chart-card">
-        <div className="w-chart-head"><h3 className="w-chart-title">Recent accepted readings</h3></div>
-        <p className="w-chart-sub">
+      <div className="ha-card">
+        <div className="ha-card-head"><h3 className="ha-card-title">Recent accepted readings</h3></div>
+        <p className="ha-card-sub">
           A row here means <strong>water was actually used</strong>. The meter broadcasts constantly,
           but it only reports a bigger number when gallons have gone through it — so this table stays
           empty during a quiet night and that is the correct, healthy result.
