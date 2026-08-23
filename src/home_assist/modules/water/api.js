@@ -9,6 +9,7 @@
  * endpoint genuinely serves two pages it uses require_any_panel — see ANY_WATER below.
  */
 const { require_panel, require_any_panel } = require('../../auth/require_auth');
+const meter_access = require('../../access/meter_access');
 
 /**
  * Every water panel that grants READ access to some page. Used by the endpoints that feed a control
@@ -40,28 +41,65 @@ function guard(fn) {
 }
 
 /**
- * Resolve the `?meter=` selector.
+ * Resolve the `?meter=` selector FOR THIS USER.
  *
- * Three shapes, and the third is the new one:
- *   'mine' (or absent)  your meter
- *   'all'               no meter filter
- *   a numeric id        that meter only
+ * Three shapes:
+ *   'mine' (or absent)  the user's primary meter
+ *   'all'               every meter the user is allowed
+ *   a numeric id        that meter — 403 if they are not allowed it
  *
- * Deliberately resolved to the SAME (meter_id, scope) pair the queries already took, so adding a
- * per-meter selection changed no SQL at all -- 'mine' with a different id is exactly what the store
- * layer was already doing. An unknown id simply returns no rows, which is the right answer and
- * leaks nothing about which meters exist.
+ * `mine` is per-USER, not per-collector. It used to resolve to cfg.meter_id, the one global id the
+ * radio is tuned to. Under that rule, restricting someone to a neighbour's meter would still hand
+ * them the owner's data through the default selection -- the restriction would look applied and do
+ * nothing.
+ *
+ * Returns null when the request names a meter the user may not see. Callers turn that into a 403
+ * rather than an empty result: silently returning no rows would read as "your meter is quiet",
+ * which on a leak monitor is the most dangerous possible way to say "denied".
  */
-function resolve_meter(raw, cfg) {
+function resolve_meter(raw, cfg, req) {
+  const user = req && req.user;
+  const role = (req && req.role) || 'user';
+  const own = meter_access.primary(user, role, cfg.meter_id);
+  const allowed = meter_access.allowed(user, role);
   const s = String(raw === undefined || raw === null ? '' : raw).trim();
-  if (s === 'all') return { scope: 'all', meter_id: cfg.meter_id, selection: 'all' };
+
+  if (s === 'all') {
+    // 'all' is now a LIST, never "no filter". The store layer used to omit the WHERE clause
+    // entirely for this scope, so a restricted user would have seen every meter's packets through
+    // the Real time tab -- the one place the restriction could be walked straight around.
+    return { scope: 'all', meter_id: own, selection: 'all', allowed: allowed };
+  }
   if (/^[0-9]{1,20}$/.test(s)) {
     const id = Number(s);
-    if (id > 0 && Number.isSafeInteger(id)) {
-      return { scope: 'mine', meter_id: id, selection: String(id) };
-    }
+    if (!(id > 0 && Number.isSafeInteger(id))) return { scope: 'mine', meter_id: own, selection: 'mine', allowed: allowed };
+    if (!meter_access.is_allowed(user, role, id)) return null;
+    return { scope: 'mine', meter_id: id, selection: String(id), allowed: allowed };
   }
-  return { scope: 'mine', meter_id: cfg.meter_id, selection: 'mine' };
+  return { scope: 'mine', meter_id: own, selection: 'mine', allowed: allowed };
+}
+
+
+/**
+ * `other_ids` is stored as "id x count id x count …" — a list of OTHER meters heard in that minute.
+ * It is data about meters the user may not be allowed, so it obeys the same grant as everything
+ * else. A permission that holds on the main table and not on a sidebar is not a permission.
+ */
+function filter_other_ids(raw, allowed) {
+  const s = String(raw === undefined || raw === null ? '' : raw).trim();
+  if (!s) return null;
+  if (allowed === undefined || allowed === null || allowed === 'all') return s;
+  const ok = (Array.isArray(allowed) ? allowed : []).map(String);
+  const kept = s.split(/\s+/).filter(function (tok) {
+    return ok.indexOf(String(tok).split('x')[0]) >= 0;
+  });
+  return kept.length ? kept.join(' ') : null;
+}
+
+/** The 403 every caller sends when resolve_meter refuses. One sentence, one place. */
+function deny(res) {
+  res.status(403).json({ ok: false, error: 'you do not have access to that meter' });
+  return null;
 }
 
 function keys_for_today(now, tz) {
@@ -81,7 +119,8 @@ function mount(app) {
     // describe the SAME meter. Rules are pure functions over hour buckets, so running them for a
     // neighbour is a display calculation only — nothing here fires an alert. The collector, which
     // does fire them, stays owned-only.
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     const meter_id = sel.meter_id;
     const is_owned = meter_id === cfg.meter_id;
 
@@ -124,7 +163,7 @@ function mount(app) {
       now: now.toISOString(),
       tz: tz,
       meter_id: meter_id,
-      own_meter_id: cfg.meter_id,
+      own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id),
       selection: sel.selection,
       is_owned: is_owned,
       // The name of the meter IN VIEW, from the registry -- not a single global setting that could
@@ -222,7 +261,8 @@ function mount(app) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     const meter_id = sel.meter_id;
     const mode = req.query.mode === 'long' ? 'long' : 'heartbeat';
 
@@ -246,7 +286,7 @@ function mount(app) {
         ? observed.reduce(function (a, d) { return a + d.gallons; }, 0) / observed.length : 0;
       return res.json({
         ok: true, mode, tz, days, live,
-        meter_id: meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+        meter_id: meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
         series,
         summary: {
           total: series.reduce(function (a, d) { return a + d.gallons; }, 0),
@@ -274,7 +314,7 @@ function mount(app) {
 
     res.json({
       ok: true, mode, tz, hours, live,
-      meter_id: meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+      meter_id: meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
       max_hours: HEARTBEAT_MAX_HOURS,
       series: rx.map(function (r) {
         return {
@@ -303,7 +343,8 @@ function mount(app) {
     const cfg = await settings.all();
     const tz = time.zone();
     const now = new Date();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     const scope = sel.scope;
     const hours = Math.max(0.05, Math.min(Number(req.query.hours) || 1, cfg.packets_retention_days * 24));
 
@@ -311,9 +352,9 @@ function mount(app) {
     // downstream that reasons about coverage uses `counts`, not the length of this array.
     const LIMIT = Math.max(1, Math.min(Number(req.query.limit) || 3000, 20000));
     const [rows, heard, counts] = await Promise.all([
-      readings.packet_series(sel.meter_id, hours, scope, LIMIT),
-      readings.meters_heard(hours),
-      readings.packet_count(sel.meter_id, hours, scope),
+      readings.packet_series(sel.meter_id, hours, scope, LIMIT, sel.allowed),
+      readings.meters_heard(hours, sel.allowed),
+      readings.packet_count(sel.meter_id, hours, scope, sel.allowed),
     ]);
 
     const packets = rows.map(function (r) {
@@ -379,7 +420,7 @@ function mount(app) {
       decode: rules.decode_rate({ length: focus_total }, interval, coverage.seconds),
       coverage: coverage,
       meter_id: sel.meter_id,
-      own_meter_id: cfg.meter_id,
+      own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id),
       selection: sel.selection,
       enabled: !!cfg.packets_enabled,
       capture_all: !!cfg.packets_capture_all_meters,
@@ -418,10 +459,16 @@ function mount(app) {
   // packets are pruned within a day and a dropdown whose options vanish overnight reads as a bug.
   app.get('/api/water/meters', require_any_panel(ANY_WATER), guard(async function (req, res) {
     const cfg = await settings.all();
-    const list = await meters.list();
+    const all = await meters.list();
+    const grant = meter_access.allowed(req.user, req.role);
+    // The picker is the visible surface of the grant. Filtering it is cosmetic on its own -- the
+    // endpoints enforce -- but a dropdown offering a meter that 403s is a broken app, not a secure
+    // one.
+    const list = grant === 'all' ? all
+      : all.filter(function (m) { return grant.indexOf(Number(m.meter_id)) >= 0; });
     res.json({
       ok: true,
-      own_meter_id: cfg.meter_id,
+      own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id),
       observed_retention_days: cfg.observed_retention_days,
       // The fallback shown beside an empty per-meter address box, so "blank" is never a mystery.
       default_email_to: mailer.parse_recipients(cfg.alert_email_to).join(', ')
@@ -437,6 +484,9 @@ function mount(app) {
   // which meter is allowed to email you at 3am certainly is.
   app.post('/api/water/meters/:id', require_panel('water-meters'), guard(async function (req, res) {
     const cfg = await settings.all();
+    // The PANEL says you may edit meters. The GRANT says which ones. Checking only the panel would
+    // let someone rename, rescale or set the alert address on a meter they cannot even see.
+    if (!meter_access.is_allowed(req.user, req.role, req.params.id)) return deny(res);
     const r = await meters.update(req.params.id, req.body || {}, cfg.meter_id);
     if (!r.ok) return res.status(400).json(r);
     res.json({ ok: true, meters: await meters.list() });
@@ -447,6 +497,7 @@ function mount(app) {
   app.post('/api/water/meters/:id/test', require_panel('water-meters'), guard(async function (req, res) {
     const cfg = await settings.all();
     const id = Number(req.params.id) || 0;
+    if (!meter_access.is_allowed(req.user, req.role, id)) return deny(res);
     const list = await meters.list();
     const m = list.find(function (x) { return Number(x.meter_id) === id; });
     if (!m) return res.status(404).json({ ok: false, error: 'no such meter' });
@@ -471,7 +522,8 @@ function mount(app) {
   // ── reception: the persistent "is the radio hearing my meter" record ──
   app.get('/api/water/reception', require_panel('water-diagnostics'), guard(async function (req, res) {
     const cfg = await settings.all();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     const minutes = Math.max(5, Math.min(Number(req.query.minutes) || 60, 1440));
     const [series, state] = await Promise.all([
       readings.reception_series(sel.meter_id, minutes),
@@ -484,7 +536,7 @@ function mount(app) {
       tz: time.zone(),
       minutes: minutes,
       meter_id: sel.meter_id,
-      own_meter_id: cfg.meter_id,
+      own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id),
       selection: sel.selection,
       // Seconds since the last packet from OUR meter. This is the real-time number — the per-minute
       // series is the history behind it.
@@ -499,7 +551,9 @@ function mount(app) {
           // definition, so a chart plotting that column flatlines -- and a flat zero on this chart
           // means "the radio heard nothing", the exact wrong conclusion.
           packets_meter: Number(r.packets_meter),
-          other_ids: r.other_ids || null,
+          // other_ids is a list of OTHER meters heard that minute. It obeys the same grant as
+          // everything else, or the restriction leaks through a sidebar nobody thought about.
+          other_ids: filter_other_ids(r.other_ids, sel.allowed),
           rssi_avg: r.rssi_avg === null ? null : Number(r.rssi_avg),
           rssi_best: r.rssi_best === null ? null : Number(r.rssi_best),
           snr_avg: r.snr_avg === null ? null : Number(r.snr_avg),
@@ -511,12 +565,13 @@ function mount(app) {
   // ── charts ──
   app.get('/api/water/hourly', require_any_panel(['water-monitor', 'water-history']), guard(async function (req, res) {
     const cfg = await settings.all();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     const series = await readings.hourly_series(sel.meter_id, req.query.hours || 48);
     res.json({
       ok: true,
       series: series,
-      meter_id: sel.meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+      meter_id: sel.meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
       overnight_window: [cfg.overnight_start_hour, cfg.overnight_end_hour],
       tz: time.zone(),
     });
@@ -524,20 +579,22 @@ function mount(app) {
 
   app.get('/api/water/daily', require_panel('water-history'), guard(async function (req, res) {
     const cfg = await settings.all();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     const series = await readings.daily_series(sel.meter_id, req.query.days || 30);
     res.json({
       ok: true, series: series, tz: time.zone(),
-      meter_id: sel.meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+      meter_id: sel.meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
     });
   }));
 
   app.get('/api/water/readings', require_panel('water-diagnostics'), guard(async function (req, res) {
     const cfg = await settings.all();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     res.json({
       ok: true,
-      meter_id: sel.meter_id, own_meter_id: cfg.meter_id, selection: sel.selection,
+      meter_id: sel.meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
       readings: await readings.recent_readings(sel.meter_id, req.query.limit || 25),
     });
   }));
@@ -545,15 +602,22 @@ function mount(app) {
   // ── alert history ──
   app.get('/api/water/alerts', require_any_panel(['water-alerts', 'water-monitor']), guard(async function (req, res) {
     const cfg = await settings.all();
-    const sel = resolve_meter(req.query.meter, cfg);
+    const sel = resolve_meter(req.query.meter, cfg, req);
+    if (!sel) return deny(res);
     // 'all' means every meter's history in one list, which is genuinely useful here -- unlike a
     // usage chart, alerts from two meters can sit side by side without being summed into a lie.
     const filter = sel.selection === 'all' ? 0 : sel.meter_id;
-    const rows = await alerts.recent(req.query.limit || 50, filter, cfg.meter_id);
+    const rows_all = await alerts.recent(req.query.limit || 50, filter, sel.meter_id);
+    // On 'all' the query is unfiltered, so the grant has to be applied here. A row for a meter the
+    // user may not see would otherwise arrive with its message and its numbers attached.
+    const rows = sel.allowed === 'all' ? rows_all : rows_all.filter(function (r) {
+      const mid = Number(r.meter_id) || sel.meter_id;
+      return sel.allowed.indexOf(mid) >= 0;
+    });
     res.json({
       ok: true,
       meter_id: sel.meter_id,
-      own_meter_id: cfg.meter_id,
+      own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id),
       selection: sel.selection,
       alerts: rows.map(function (r) {
         let detail = null;
@@ -730,4 +794,6 @@ function packets_sql(meter_id, hours, scope) {
   ];
 }
 
-module.exports = { mount };
+// resolve_meter and filter_other_ids are exported for the tests only — they are the two places the
+// meter grant is actually enforced, and pinning them beats asserting on a mounted Express app.
+module.exports = { mount, resolve_meter, filter_other_ids };

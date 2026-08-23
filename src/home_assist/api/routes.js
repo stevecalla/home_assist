@@ -11,6 +11,7 @@
 const session = require('../auth/session');
 const store = require('../auth/auth_store');
 const panel_access = require('../access/panel_access');
+const meter_access = require('../access/meter_access');
 const { require_auth, require_admin } = require('../auth/require_auth');
 const registry = require('../modules/registry');
 const db = require('../store/db');
@@ -101,6 +102,8 @@ module.exports = function mount(app) {
       }
       const removed = store.remove_user(user);
       try { panel_access.clear_user(user); } catch (e) { /* drop any orphaned override */ }
+      // Both grants, or a re-added username silently inherits the old one's meter access.
+      try { meter_access.clear_user(user); } catch (e) { /* ignore */ }
       res.json({ ok: removed, error: removed ? null : 'no such user' });
     } catch (e) { res.status(400).json({ ok: false, error: (e && e.message) || String(e) }); }
   });
@@ -121,6 +124,45 @@ module.exports = function mount(app) {
         not_grantable: panel_access.NOT_GRANTABLE,
       });
     } catch (e) { res.status(500).json({ ok: false, error: (e && e.message) || String(e) }); }
+  });
+
+  // ── meter access: WHOSE DATA, as opposed to WHICH PAGES ──────────────────────────────────
+  //
+  // Deliberately a separate endpoint from panel-access rather than a field on it. They answer
+  // different questions and are edited at different times: panels change when someone's job
+  // changes, meters change when a household is added.
+  //
+  // The meter LIST comes from water_meters, so this route reaches into the water module for it.
+  // That is the one coupling — the alternative is a second registry of meters at platform level,
+  // which would immediately disagree with the first.
+  app.get('/api/admin/meter-access', require_admin, async function (req, res) {
+    try {
+      const users = store.env_accounts().map(function (u) { return u.user; })
+        .concat(store.list_users().map(function (u) { return u.user; }));
+      let meters = [];
+      try { meters = await require('../modules/water/store/meters').list(); }
+      catch (e) { /* no database yet — the grants still edit, they just have no names beside them */ }
+      res.json({
+        ok: true,
+        access: meter_access.get(),
+        users: users,
+        // `model` rides along so a meter nobody has named still says something more useful than a
+        // bare number. Naming happens on the Meters page; this one only grants.
+        meters: meters.map(function (m) {
+          return { meter_id: m.meter_id, meter_name: m.meter_name, model: m.model, owned: m.owned };
+        }),
+      });
+    } catch (e) { res.status(500).json({ ok: false, error: (e && e.message) || String(e) }); }
+  });
+
+  app.post('/api/admin/meter-access', require_admin, function (req, res) {
+    try {
+      const b = req.body || {};
+      if (b.default !== undefined) meter_access.set_default(b.default);
+      if (b.user && b.clear) meter_access.clear_user(b.user);
+      else if (b.user && b.meters !== undefined) meter_access.set_user(b.user, b.meters);
+      res.json({ ok: true, access: meter_access.get() });
+    } catch (e) { res.status(400).json({ ok: false, error: (e && e.message) || String(e) }); }
   });
 
   app.post('/api/admin/panel-access', require_admin, function (req, res) {

@@ -4,10 +4,13 @@ import { api } from '../lib/api.js';
 // water.css to styles.css so a platform page can use it without importing a module's stylesheet.
 import CollapsibleCard from '../components/CollapsibleCard.jsx';
 
-// Admin · Access — user management + panel access, over the admin-gated /api/admin/* endpoints.
+// Admin · Access — user management + panel access + meter access, over the admin-gated /api/admin/*
+// endpoints.
 //   • Users: .env recovery accounts (always valid, not removable) + stored scrypt-hashed users.
-//   • Panel access — general default: which panels non-admins see by default (admins always see all).
-//   • Panel access — per user: override the default for one user ("Use default" removes the override).
+//   • Panel access — WHICH PAGES a user can open (Monitor, History, Settings…).
+//   • Meter access — WHOSE DATA those pages show (their meter, a neighbour's, all of them).
+// The two are independent on purpose: "the Monitor page, but only meter 22221234" is a legitimate
+// grant, and conflating them is what would make it impossible to express.
 // The panel catalog is built server-side from the module registry, so new modules' panels appear here.
 //
 // NOTE (deferred): once Microsoft SSO lands, "add user" becomes "add USAT email" and the password field
@@ -35,6 +38,12 @@ export default function Admin() {
 
   const [selUser, setSelUser] = useState(''); const [uMode, setUMode] = useState('default'); const [uSet, setUSet] = useState({}); const [accMsg, setAccMsg] = useState(null);
 
+  // ---- meter access (same shape, different question) ----
+  const [meters, setMeters] = useState([]);
+  const [maccess, setMaccess] = useState({ default: 'all', users: {} });
+  const [mDefMode, setMDefMode] = useState('all'); const [mDefSet, setMDefSet] = useState({}); const [mDefMsg, setMDefMsg] = useState(null);
+  const [mUMode, setMUMode] = useState('default'); const [mUSet, setMUSet] = useState({}); const [mAccMsg, setMAccMsg] = useState(null);
+
   const loadUsers = async () => {
     const r = await api.adminUsers();
     if (r.status === 200) setUsers(r.body.users || []); else setErr(r.body.error || ('HTTP ' + r.status));
@@ -50,13 +59,29 @@ export default function Admin() {
     setDefMode(defAll ? 'all' : 'some');
     const ds = {}; if (!defAll) (a.default || []).forEach((k) => { ds[k] = true; }); setDefSet(ds);
   };
-  useEffect(() => { loadUsers(); loadAccess(); }, []);
+  const loadMeterAccess = async () => {
+    const r = await api.adminMeterAccess();
+    if (r.status !== 200) { setErr(r.body.error || ('HTTP ' + r.status)); return; }
+    setMeters(r.body.meters || []);
+    const a = r.body.access || { default: 'all', users: {} };
+    setMaccess(a);
+    const defAll = a.default === 'all';
+    setMDefMode(defAll ? 'all' : 'some');
+    const ds = {}; if (!defAll) (a.default || []).forEach((id) => { ds[String(id)] = true; }); setMDefSet(ds);
+  };
+  useEffect(() => { loadUsers(); loadAccess(); loadMeterAccess(); }, []);
 
   useEffect(() => {
     const ov = access.users ? access.users[selUser] : undefined;
     setUMode(ov === undefined ? 'default' : (ov === 'all' ? 'all' : 'some'));
     const s = {}; if (Array.isArray(ov)) ov.forEach((k) => { s[k] = true; }); setUSet(s);
   }, [selUser, access]);
+
+  useEffect(() => {
+    const ov = maccess.users ? maccess.users[selUser] : undefined;
+    setMUMode(ov === undefined ? 'default' : (ov === 'all' ? 'all' : 'some'));
+    const s = {}; if (Array.isArray(ov)) ov.forEach((id) => { s[String(id)] = true; }); setMUSet(s);
+  }, [selUser, maccess]);
 
   const knownUsers = users ? users.map((u) => u.user) : [];
 
@@ -126,6 +151,59 @@ export default function Admin() {
     return o;
   };
 
+  // ---- meter access ----------------------------------------------------------------------------
+  // The catalog is whatever the radio has heard, PLUS any id already named in a grant. That second
+  // half matters: meters appear over time, so a grant can legitimately name an id not yet decoded
+  // (a meter about to be installed). Dropping it from the grid would make it invisible — and the
+  // next save, built from the grid, would silently delete it.
+  const meterCatalog = () => {
+    const seen = {}; const out = [];
+    (meters || []).forEach((m) => { const k = String(m.meter_id); if (!seen[k]) { seen[k] = 1; out.push(m); } });
+    const extra = [];
+    const collect = (v) => { if (Array.isArray(v)) v.forEach((id) => extra.push(id)); };
+    collect(maccess.default);
+    Object.keys(maccess.users || {}).forEach((u) => collect(maccess.users[u]));
+    extra.forEach((id) => { const k = String(id); if (!seen[k]) { seen[k] = 1; out.push({ meter_id: Number(id), meter_name: '', unheard: true }); } });
+    return out;
+  };
+  const meterLabel = (id) => {
+    const m = meterCatalog().find((x) => String(x.meter_id) === String(id));
+    return m && m.meter_name ? (m.meter_name + ' (' + m.meter_id + ')') : String(id);
+  };
+  const mAllSet = () => { const o = {}; meterCatalog().forEach((m) => { o[String(m.meter_id)] = true; }); return o; };
+  const mDefaultSet = () => {
+    if (maccess.default === 'all') return mAllSet();
+    const o = {}; (Array.isArray(maccess.default) ? maccess.default : []).forEach((id) => { o[String(id)] = true; });
+    return o;
+  };
+  const effectiveMeters = () => {
+    if (!selUser) return null;
+    const u = users && users.find((x) => x.user === selUser);
+    if (u && u.role === 'admin') return { kind: 'admin' };
+    const ov = maccess.users ? maccess.users[selUser] : undefined;
+    const src = ov === undefined ? 'from the general default' : 'per-user override';
+    const eff = ov === undefined ? maccess.default : ov;
+    if (eff === 'all') return { kind: 'all', src };
+    return { kind: 'some', src, ids: Array.isArray(eff) ? eff : [] };
+  };
+  const saveMeterDefault = async () => {
+    setMDefMsg({ text: 'Saving…', kind: '' });
+    const payload = { default: mDefMode === 'all' ? 'all' : Object.keys(mDefSet).filter((k) => mDefSet[k]).map(Number) };
+    const r = await api.adminSetMeterAccess(payload);
+    if (r.status === 200 && r.body.ok) { setMaccess(r.body.access); setMDefMsg({ text: 'Saved.', kind: 'ok' }); }
+    else setMDefMsg({ text: r.body.error || 'error', kind: 'err' });
+  };
+  const saveUserMeters = async () => {
+    if (!selUser) { setMAccMsg({ text: 'pick a user', kind: 'err' }); return; }
+    setMAccMsg({ text: 'Saving…', kind: '' });
+    const payload = mUMode === 'default'
+      ? { user: selUser, clear: true }
+      : { user: selUser, meters: mUMode === 'all' ? 'all' : Object.keys(mUSet).filter((k) => mUSet[k]).map(Number) };
+    const r = await api.adminSetMeterAccess(payload);
+    if (r.status === 200 && r.body.ok) { setMaccess(r.body.access); setMAccMsg({ text: 'Saved.', kind: 'ok' }); }
+    else setMAccMsg({ text: r.body.error || 'error', kind: 'err' });
+  };
+
   const msg = (m) => (m && m.text
     ? <span className="small" style={{ marginLeft: 8, color: m.kind === 'err' ? 'var(--red)' : (m.kind === 'ok' ? '#16794a' : 'var(--muted)') }}>{m.text}</span>
     : null);
@@ -193,6 +271,49 @@ export default function Admin() {
     </div>
   );
 
+  /** The meter grid — same always-rendered / read-only-in-other-modes rule as qlist(). */
+  const mlist = (set, setSet, readOnly) => {
+    const cat = meterCatalog();
+    if (!cat.length) return <p className="muted small" style={{ margin: '8px 0' }}>No meters heard yet. Grants can still be edited once one appears.</p>;
+    const allOn = cat.every((m) => set[String(m.meter_id)]);
+    const toggleAll = (on) => { const n = { ...set }; cat.forEach((m) => { n[String(m.meter_id)] = on; }); setSet(n); };
+    return (
+      <div style={{ margin: '8px 0', opacity: readOnly ? 0.75 : 1 }}>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--muted)' }}>
+          <input type="checkbox" checked={allOn} disabled={readOnly} onChange={(e) => toggleAll(e.target.checked)} /> Meters
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '4px 16px', margin: '4px 0 0 18px' }}>
+          {cat.map((m) => {
+            const k = String(m.meter_id);
+            return (
+              <label key={k} style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 13, opacity: readOnly ? 0.55 : 1 }}
+                     title={readOnly ? 'Read-only — switch to “Only selected” to change this' : undefined}>
+                <input type="checkbox" disabled={readOnly} checked={!!set[k]} onChange={(e) => setSet({ ...set, [k]: e.target.checked })} />
+                {/* Name first, id always. The id is what a grant is actually made of and what you
+                    search the packet table by, so it is never replaced by a name — only led by one.
+                    An unnamed meter says so rather than showing a bare number, because "which of
+                    these is the neighbour?" is the whole question this grid has to answer. */}
+                <span>
+                  {m.meter_name
+                    ? <><b>{m.meter_name}</b> <span className="muted">{m.meter_id}</span></>
+                    : <><code>{m.meter_id}</code> <span className="muted" style={{ fontSize: 11 }}>{m.model || 'unnamed'}</span></>}
+                </span>
+                {m.owned ? <span style={pill('rgba(22,121,74,.16)', '#16794a')}>mine</span> : null}
+                {m.unheard ? <span className="muted" style={{ fontSize: 11 }}>(not heard yet)</span> : null}
+              </label>
+            );
+          })}
+        </div>
+        {cat.some((m) => !m.meter_name) ? (
+          <p className="muted small" style={{ margin: '6px 0 0 18px' }}>
+            Meters are named on <b>Water → Meters</b>. A name here makes a grant readable — “Neighbour, 149…”
+            rather than two numbers you have to remember apart.
+          </p>
+        ) : null}
+      </div>
+    );
+  };
+
   if (err) return (<div className="page"><h2>Users &amp; access</h2><p className="err">{err}</p></div>);
 
   return (
@@ -242,7 +363,7 @@ export default function Admin() {
       </CollapsibleCard>
 
       <CollapsibleCard
-        defaultOpen
+        defaultOpen={false}
         title="Panel access — general default"
         sub="Which panels non-admin users see by default. Admins always see every panel."
       >
@@ -263,7 +384,7 @@ export default function Admin() {
       </CollapsibleCard>
 
       <CollapsibleCard
-        defaultOpen
+        defaultOpen={false}
         title="Panel access — per user"
         sub="Override the default for one user. “Use default” removes the override."
       >
@@ -280,6 +401,12 @@ export default function Admin() {
         </div>
         {selUser && (() => {
           const e = effectiveAccess();
+          const m = effectiveMeters();
+          let mbody;
+          if (m.kind === 'admin') mbody = <em>all meters — admin role</em>;
+          else if (m.kind === 'all') mbody = <span>all meters <span className="muted">({m.src})</span></span>;
+          else if (m.ids.length) mbody = <span>{m.ids.map(meterLabel).join(', ')} <span className="muted">({m.src})</span></span>;
+          else mbody = <span><em>no meters</em> <span className="muted">({m.src})</span></span>;
           let body;
           if (e.kind === 'admin') body = <em>all panels — admin role (panel access doesn’t apply)</em>;
           else if (e.kind === 'all') body = <span>all panels <span className="muted">({e.src})</span></span>;
@@ -293,7 +420,8 @@ export default function Admin() {
           } else body = <span><em>no panels</em> <span className="muted">({e.src})</span></span>;
           return (
             <div className="small" style={{ margin: '10px 0', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)' }}>
-              <strong>{selUser}</strong> currently sees: {body}
+              <div><strong>{selUser}</strong> — pages: {body}</div>
+              <div style={{ marginTop: 4 }}><strong>{selUser}</strong> — meters: {mbody}</div>
             </div>
           );
         })()}
@@ -313,6 +441,58 @@ export default function Admin() {
           never reach user management even if granted other panels. That is why <b>Users &amp; access</b> is
           shown greyed out above: to make someone an admin, re-add them with the <b>admin</b> role
           (Users section, or <code>node src/home_assist/admin.js add &lt;user&gt;</code>).
+        </p>
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        defaultOpen={false}
+        title="Meter access — general default"
+        sub="Which water meters non-admin users see by default. Admins always see every meter. This is a separate question from panel access: it decides WHOSE DATA the pages show, not which pages open."
+      >
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <label style={rlab}><input type="radio" name="mdefmode" checked={mDefMode === 'all'} onChange={() => setMDefMode('all')} /> All meters</label>
+          <label style={rlab}><input type="radio" name="mdefmode" checked={mDefMode === 'some'} onChange={() => setMDefMode('some')} /> Only selected</label>
+        </div>
+        {mDefMode === 'some'
+          ? mlist(mDefSet, setMDefSet, false)
+          : (<>
+              <p className="muted small" style={{ margin: '10px 0 0' }}>
+                “All meters” includes meters heard in the future, not just the ones listed below.
+              </p>
+              {mlist(mAllSet(), () => {}, true)}
+            </>)}
+        <button className="btn primary" style={{ marginTop: 12 }} onClick={saveMeterDefault}>Save default</button>{msg(mDefMsg)}
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        defaultOpen={false}
+        title="Meter access — per user"
+        sub="Override the meter default for one user. Uses the same user picked above. “Use default” removes the override."
+      >
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="small">User&nbsp;
+            <select value={selUser} onChange={(e) => setSelUser(e.target.value)}>
+              <option value="">—</option>
+              {knownUsers.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </label>
+          <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'default'} onChange={() => setMUMode('default')} /> Use default</label>
+          <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'all'} onChange={() => setMUMode('all')} /> All meters</label>
+          <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'some'} onChange={() => setMUMode('some')} /> Only selected</label>
+        </div>
+        {mUMode === 'some' ? mlist(mUSet, setMUSet, false) : (
+          <>
+            <p className="muted small" style={{ margin: '10px 0 0' }}>
+              {mUMode === 'default' ? 'Inherited from the general default above. Shown read-only:' : 'Every meter, now and in future. Shown read-only:'}
+            </p>
+            {mlist(mUMode === 'default' ? mDefaultSet() : mAllSet(), () => {}, true)}
+          </>
+        )}
+        <button className="btn primary" style={{ marginTop: 12 }} onClick={saveUserMeters} disabled={!selUser}>Save user</button>{msg(mAccMsg)}
+        <p className="muted small" style={{ marginTop: 12 }}>
+          Restricting someone to one meter also changes what <b>“This meter”</b> means for them — it resolves to
+          the first meter they are allowed, not to the collector’s own meter. Requesting a meter outside the
+          grant returns <code>403</code>, and “All meters” views are filtered to the grant rather than left open.
         </p>
       </CollapsibleCard>
     </div>

@@ -207,10 +207,37 @@ async function record_packets(rows) {
  * Returned newest-first from SQL (so LIMIT keeps the RECENT rows, not the oldest ones) and then
  * reversed, because every chart in this app reads left-to-right in time.
  */
-async function packet_series(meter_id, hours, scope, limit) {
+
+/**
+ * The meter clause for a scoped query.
+ *
+ * `scope: 'all'` used to mean "omit the WHERE entirely", which was fine while every user could see
+ * every meter. With per-user meter access it became the single hole through which a restricted user
+ * could see everything: the Real time tab sends meter=all, and an unfiltered query answered it
+ * honestly. 'all' now means "all the meters YOU are allowed", so it is a list, never an absence.
+ *
+ * `allowed` is undefined or the string 'all' for an unrestricted user -- then, and only then, is
+ * there no clause. An EMPTY array means the user may see nothing and must match no rows; returning
+ * everything there would invert the permission exactly.
+ */
+function meter_clause(meter_id, scope, allowed) {
+  if (scope !== 'all') {
+    // `|| 0` rather than a bare Number(): a non-numeric id would otherwise interpolate as NaN and
+    // make MySQL throw, turning a bad request into a 500. 0 matches no meter, which is the answer.
+    const one = Number(meter_id) || 0;
+    return ' AND meter_id = ' + (Number.isSafeInteger(one) && one > 0 ? one : 0);
+  }
+  if (allowed === undefined || allowed === null || allowed === 'all') return '';
+  const ids = (Array.isArray(allowed) ? allowed : [])
+    .map(Number).filter(function (n) { return Number.isSafeInteger(n) && n > 0; });
+  if (!ids.length) return ' AND 1 = 0';
+  return ' AND meter_id IN (' + ids.join(',') + ')';
+}
+
+async function packet_series(meter_id, hours, scope, limit, allowed) {
   const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
   const cap = Math.max(1, Math.min(Number(limit) || 5000, 20000));
-  const where = scope === 'all' ? '' : ' AND meter_id = ' + Number(meter_id);
+  const where = meter_clause(meter_id, scope, allowed);
   const rows = await db.query(
     'SELECT meter_id, heard_at_utc, heard_at_mtn, is_ours, volume, delta, flags_1, flags_2, ' +
     '       integrity, rssi, snr, noise, freq_mhz ' +
@@ -231,9 +258,9 @@ async function packet_series(meter_id, hours, scope, limit) {
  *     truncated 24-hour window reports 6,000 heard against 20,571 expected -- 29%, which reads as a
  *     failing antenna when the only thing that failed is a LIMIT clause.
  */
-async function packet_count(meter_id, hours, scope) {
+async function packet_count(meter_id, hours, scope, allowed) {
   const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
-  const where = scope === 'all' ? '' : ' AND meter_id = ' + Number(meter_id);
+  const where = meter_clause(meter_id, scope, allowed);
   const rows = await db.query(
     'SELECT COUNT(*) AS total, SUM(is_ours) AS ours, ' +
     // The OLDEST row in the window. Without it there is no way to tell "the radio missed 86% of
@@ -254,13 +281,16 @@ async function packet_count(meter_id, hours, scope) {
 }
 
 /** Who else is out there, and how well we hear them. The antenna scoreboard. */
-async function meters_heard(hours) {
+async function meters_heard(hours, allowed) {
   const h = Math.max(0.05, Math.min(Number(hours) || 1, 168));
+  // The antenna scoreboard is a list of OTHER PEOPLE'S meter ids. It has to obey the same grant as
+  // the packet table, or the restriction leaks through a sidebar.
+  const where = meter_clause(0, 'all', allowed);
   return db.query(
     'SELECT meter_id, COUNT(*) AS packets, MAX(is_ours) AS is_ours, ' +
     '       AVG(rssi) AS rssi_avg, AVG(snr) AS snr_avg, ' +
     '       MIN(heard_at_mtn) AS first_seen, MAX(heard_at_mtn) AS last_seen ' +
-    'FROM water_packets WHERE heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ? SECOND) ' +
+    'FROM water_packets WHERE heard_at_utc >= (UTC_TIMESTAMP() - INTERVAL ? SECOND)' + where + ' ' +
     'GROUP BY meter_id ORDER BY packets DESC',
     [Math.round(h * 3600)]
   );
@@ -570,6 +600,6 @@ module.exports = {
   prune_raw, prune_readings, prune_alerts, prune_hourly, prune_observed, HOURLY_MIN_DAYS, table_sizes,
   backfill_observed_hourly,
   record_reception, reception_series, prune_reception, daily_series_range,
-  record_packets, packet_series, packet_count, meters_heard, prune_packets,
+  record_packets, packet_series, packet_count, meters_heard, prune_packets, meter_clause,
   hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,
 };

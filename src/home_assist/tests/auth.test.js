@@ -275,12 +275,18 @@ test('the admin page shows every card collapsed-able and the panel list always',
   // out of water.css — a shared component whose CSS lives inside one module can only be used by
   // that module, which is a shared component in name only.
   assert.match(ui, /import CollapsibleCard from '\.\.\/components\/CollapsibleCard\.jsx'/);
-  assert.strictEqual((ui.match(/<CollapsibleCard/g) || []).length, 3, 'Users + default + per-user');
-  assert.strictEqual((ui.match(/<\/CollapsibleCard>/g) || []).length, 3, 'all three must be closed');
+  // Pin the SHAPE — every card opens and closes — rather than a count, which only says how many
+  // sections the page happened to have on the day it was written.
+  const opens = (ui.match(/<CollapsibleCard/g) || []).length;
+  assert.ok(opens >= 5, 'Users + panel default/per-user + meter default/per-user');
+  assert.strictEqual((ui.match(/<\/CollapsibleCard>/g) || []).length, opens, 'every card must be closed');
   assert.ok(ui.indexOf('function Section(') === -1, 'the local duplicate must be gone');
-  // Open by default: a settings page whose contents hide until you hunt for them is worse than a
-  // long one. Collapsing is for when the reader is done with a section.
-  assert.match(ui, /defaultOpen\n/, 'cards open by default');
+  // Users open, the rest collapsed. Five expanded cards made the page a scroll to nowhere — you
+  // could not see what sections existed without travelling past all of them. The one you always
+  // want first stays open; the others announce themselves by title and open on request.
+  assert.match(ui, /defaultOpen\n/, 'the Users card opens by default');
+  assert.strictEqual((ui.match(/defaultOpen=\{false\}/g) || []).length, opens - 1,
+    'every card except Users must start collapsed');
 
   // The grid renders in EVERY mode. It used to appear only under "Only selected", so the two modes
   // people actually leave things on showed no list at all — and "what can this person see?" had no

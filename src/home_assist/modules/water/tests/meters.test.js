@@ -160,8 +160,12 @@ test('the whole page follows the selection, not just the packet table', function
     const i = api.indexOf("app.get('" + route + "'");
     assert.ok(i !== -1, route + ' must exist');
     const seg = api.slice(i, i + 1400);
-    assert.match(seg, /resolve_meter\(req\.query\.meter, cfg\)/,
+    // `req` is the third argument because "mine" is now per-user: resolve_meter needs the caller to
+    // know whose meter that is, and to refuse an id outside their grant.
+    assert.match(seg, /resolve_meter\(req\.query\.meter, cfg, req\)/,
       route + ' must resolve the selected meter rather than always using cfg.meter_id');
+    assert.match(seg, /if \(!sel\) return deny\(res\)/,
+      route + ' must 403 on a refused meter, not fall through to a default one');
   }
 });
 
