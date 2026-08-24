@@ -607,7 +607,24 @@ did nothing. Only measuring the rendered heights caught it. `tests/mobile.test.j
 selectors match markup that actually exists, because **a CSS rule with no matching element fails
 silently and looks like success in a diff.**
 
-314 tests pass, 62/62 files parse, SPA builds clean.
+**A second silent-failure bug, found the same way.** The meter dropdown read
+`background: var(--surface, #1b2130)`. There is no `--surface` token in this app and never has been,
+so that fallback was the *only* value it ever had — a hardcoded dark navy wearing the syntax of a
+theme-aware colour. In dark mode it happened to match the panel, so nobody saw it. In light mode it
+painted a dark box holding dark inherited text: a menu that opened and looked empty. Now
+`var(--panel)` with an explicit `color: var(--ink)` — inheriting was what made its legibility depend
+on wherever it happened to be mounted. Measured at 17.9:1 light and 14.4:1 dark.
+
+Writing the regression test for that turned up a second one: `.w-alert-detail > summary:hover` used
+`var(--text)`, also undefined and with no fallback, so the declaration was invalid at
+computed-value time and the hover did nothing whatsoever.
+
+`tests/mobile.test.js` now scans both stylesheets for `var()` on a token defined nowhere. **A var()
+with an undefined token is not a colour with a safety net; it is a constant.** The scan strips
+comments first — the same trap as the `.w-tool` fix, and the second time in one pass that a check
+would otherwise have flagged an explanation as the thing it describes.
+
+316 tests pass, 62/62 files parse, SPA builds clean.
 
 ## Open items
 
