@@ -55,7 +55,12 @@ const RT_CHIPS = [{ m: 15, label: '15m' }, { m: 60, label: '1h' }, { m: 360, lab
 // The row counts are a ladder rather than a free number: past a few thousand the browser, not the
 // database, is the limit, and a text box inviting "50000" would invite a frozen tab.
 const RT_ROW_CHIPS = [200, 500, 2000, 10000];
-const RT_ROWS_DEFAULT = 500;
+// 2,000 rows paired with a 1h default range below: 1h is ~840 packets, so the default view draws
+// its window COMPLETE, with headroom. That pairing is the point. "24h + max" was considered and
+// rejected -- 24h is ~20,000 packets and max is 10,000, so the chip would say 24h while the chart
+// drew the newest twelve hours. A range control that overstates its range by half is worse than a
+// short one, and this is the card people check to decide whether the antenna is healthy.
+const RT_ROWS_DEFAULT = 2000;
 const RT_MS = 4000;         // matched to the meter's transmit cadence — a new row per poll
 
 const MODE_TITLE = {
@@ -113,7 +118,7 @@ export default function Monitor() {
   const [alerts, setAlerts] = useState(null);
   const [meter, setMeter] = useState(null);
   const [rt, setRt] = useState(null);
-  const [rtMin, setRtMin] = useState(15);
+  const [rtMin, setRtMin] = useState(60);   // one hour: ~840 packets, drawn in full at 2,000 rows
   const [rtRowLimit, setRtRowLimit] = useState(RT_ROWS_DEFAULT);
   // 'mine' | 'all' | a meter id as a string. The API resolves all three to the same
   // (meter_id, scope) pair the queries already took, so this stayed a one-line change.
@@ -138,7 +143,11 @@ export default function Monitor() {
   // Real time, this meter, as a table is the default because it is the view that answers the
   // question this card exists for — "what is the radio doing right now" — without needing a
   // reading of the picture first. The other two tabs are context you go looking for.
-  const [mode, setMode] = useState('realtime');
+  // Heartbeat, not Real time. Real time is a DIAGNOSTIC -- it answers "is the radio decoding right
+  // now", which is a question you ask when something is already wrong. Heartbeat over 72h answers
+  // "is my water use normal and is the receiver alive", which is why the page gets opened. The card
+  // was defaulting to the firehose.
+  const [mode, setMode] = useState('heartbeat');
   const [hours, setHours] = useState(72);
   const [days, setDays] = useState(30);
   const [hoursText, setHoursText] = useState('72');
