@@ -96,6 +96,29 @@ function filter_other_ids(raw, allowed) {
   return kept.length ? kept.join(' ') : null;
 }
 
+/**
+ * `water_raw_samples` holds whole rtl_433 JSON lines — and `reason` includes `other_meter`, so by
+ * design the buffer contains NEIGHBOURS. Each line carries their id and volume in plain text.
+ *
+ * The Diagnostics page renders it verbatim, which made this the last way to read a meter you were
+ * not granted: not through a chart, but by reading the decoder's own words underneath one.
+ *
+ * FAILS CLOSED. A line whose id cannot be parsed is dropped for a restricted user rather than
+ * shown. The people who need unparseable garbage are the ones doing antenna forensics, and they are
+ * not the ones under a grant.
+ */
+function filter_raw_samples(rows, allowed) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (allowed === undefined || allowed === null || allowed === 'all') return list;
+  const ok = (Array.isArray(allowed) ? allowed : []).map(Number);
+  if (!ok.length) return [];
+  return list.filter(function (r) {
+    let id = null;
+    try { id = Number(JSON.parse(r && r.line).id); } catch (e) { return false; }
+    return Number.isSafeInteger(id) && ok.indexOf(id) >= 0;
+  });
+}
+
 /** The 403 every caller sends when resolve_meter refuses. One sentence, one place. */
 function deny(res) {
   res.status(403).json({ ok: false, error: 'you do not have access to that meter' });
@@ -242,7 +265,13 @@ function mount(app) {
         packets_retention_days: cfg.packets_retention_days,
         alerts_retention_days: cfg.alerts_retention_days,
       },
-      meter: { id: cfg.meter_id, gallons_per_unit: cfg.gallons_per_unit },
+      // The user's OWN meter, not the collector's. Identical on an unrestricted install; on a
+      // restricted one, printing cfg.meter_id here would disclose the id of a meter they are not
+      // granted — on a page whose whole job is to be read.
+      meter: {
+        id: meter_access.primary(req.user, req.role, cfg.meter_id),
+        gallons_per_unit: cfg.gallons_per_unit,
+      },
       // The Real time tab's vocabulary, served from the SAME constants the badge and the gap
       // detector use — so the Reference page cannot drift from the thing it documents.
       signal_quality: rules.SIGNAL_QUALITY,
@@ -671,11 +700,17 @@ function mount(app) {
     // in the app on a different clock from every other. Comparing a raw line against a pm2 log or
     // against the heartbeat above it then meant doing timezone arithmetic in your head, which is
     // exactly the tax the dual-timestamp convention exists to remove.
+    const want = Math.max(1, Math.min(Number(req.query.limit) || 20, 200));
+    const grant = meter_access.allowed(req.user, req.role);
+    // Over-fetch when the grant is narrow, because the filter runs in Node: asking for 20 rows and
+    // then discarding the neighbours' would hand back two. Capped so a restricted user cannot make
+    // this the most expensive query in the app.
+    const fetch = grant === 'all' ? want : Math.min(want * 10, 1000);
     const rows = await db.query(
       'SELECT id, seen_at_utc, seen_at_mtn, reason, line FROM water_raw_samples ORDER BY id DESC LIMIT ?',
-      [Math.max(1, Math.min(Number(req.query.limit) || 20, 200))]
+      [fetch]
     );
-    res.json({ ok: true, tz: time.zone(), samples: rows });
+    res.json({ ok: true, tz: time.zone(), samples: filter_raw_samples(rows, grant).slice(0, want) });
   }));
 }
 
@@ -796,4 +831,4 @@ function packets_sql(meter_id, hours, scope) {
 
 // resolve_meter and filter_other_ids are exported for the tests only — they are the two places the
 // meter grant is actually enforced, and pinning them beats asserting on a mounted Express app.
-module.exports = { mount, resolve_meter, filter_other_ids };
+module.exports = { mount, resolve_meter, filter_other_ids, filter_raw_samples };
