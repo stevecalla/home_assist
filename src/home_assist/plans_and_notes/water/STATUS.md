@@ -563,6 +563,52 @@ built from that grid, silently delete it.
 
 305 tests pass, 60/60 files parse, SPA builds clean.
 
+## Mobile (2026-08-24)
+
+The phone is where a leak monitor actually gets read — from bed, from the car, from someone else's
+kitchen. The desktop layout is where it gets BUILT, which is precisely why the mobile rules needed
+pinning: nothing in a normal working day fails when they break.
+
+Measured before changing anything, with a static harness of the real markup and the real stylesheets
+rendered in headless Chromium at 390 / 540 / 820px. That is what separated the two genuine faults
+from the six things that already worked.
+
+**Already correct, and left alone:** the viewport meta; the side rail collapsing to a horizontal pill
+strip at 820px; all three charts (they measure their container with a `ResizeObserver` and draw in
+real pixels — built for this from the start); tiles, meter rows and the admin grids (`auto-fit` +
+`minmax`); the Settings field rows; the Alerts table's `.stack` treatment; and every data table's
+`overflow: auto` wrapper. Thirteen media queries were already in place.
+
+| Fault | Detail |
+|---|---|
+| **The export toolbar ran off the screen** | `.w-tools` is an `inline-flex` with no wrap and holds up to seven controls. At 390px it measured 437px wide: **CSV and Table were in the DOM and unreachable on the device.** Now wraps, and takes the card's full width below 820px |
+| **`title` tooltips do not exist on touch** | Every metric on the water pages explains itself through a `title`. A phone has no hover, so on the device this app is most read, **every explanation was silently unavailable** — not hard to find, absent |
+
+`components/HelpTip.jsx` fixes the second: one capture-phase listener at the document, mounted once
+in `App.jsx`, that turns a tap on any `?` into a bottom sheet reading the nearest `[title]` ancestor.
+Capture phase specifically — the `?` inside a chip sits in a `<button>` with its own handler, so
+without intercepting first, asking what a number means would also change your row limit. Gated on
+`(hover: none)`, so a mouse keeps the native tooltip and desktop behaviour is unchanged.
+
+Smaller work, all of it pointer- or width-gated so the desktop layout is untouched:
+
+| Change | Why |
+|---|---|
+| Chips 23px → 35px, toolbar buttons 23px → 35px, rail links 35px → 39px, picker pills → 33px | Every primary control on the Monitor was below every touch-target guideline there is |
+| `.w-q` hit area grown to ~36px via a negative-inset `::after` | The glyph stays a deliberate 12px circle — a 40px badge beside every label would shout louder than the numbers it annotates. Grow the target, not the mark |
+| Checkboxes and radios → 18px | Admin is a grid of them, and a mis-tap there silently changes someone's access |
+| Sticky first column on the packet table, tighter cells | Twelve columns will never fit a phone and should not try. What matters is that scrolling right to read SNR does not cost you the row you were on — numbers you cannot attribute |
+| `.rail-subhead` hidden in the strip; trailing-edge mask on the rail | The Setup divider's `::after` is `flex: 1` — a rule meant to fill a column, which in a row stretches to eat the whole scroll width. The mask says "there is more this way" without costing a row of vertical space |
+| Picker pill truncates at 58vw | "name · id" for a named meter is wider than a phone; the id identifies and is last, so the name is what gives |
+
+**One mistake worth recording:** the first pass styled `.w-tool` — a class that appears nowhere in
+the app, because those buttons are styled through `.w-tools button`. The rule parsed, shipped, and
+did nothing. Only measuring the rendered heights caught it. `tests/mobile.test.js` now asserts the
+selectors match markup that actually exists, because **a CSS rule with no matching element fails
+silently and looks like success in a diff.**
+
+314 tests pass, 62/62 files parse, SPA builds clean.
+
 ## Open items
 
 1. **Tune `overnight_threshold_gal`.** Currently 3 gal, which is a guess. An ice maker, a

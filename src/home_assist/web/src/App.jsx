@@ -7,6 +7,9 @@ import SideRail from './components/SideRail.jsx';
 import ThemeToggle from './components/ThemeToggle.jsx';
 import UserMenu from './components/UserMenu.jsx';
 import FooterClock from './components/FooterClock.jsx';
+// Mounted once for the whole app: turns the `?` glyphs into something a finger can use. Inert on
+// any device with a cursor. See components/HelpTip.jsx.
+import HelpTip from './components/HelpTip.jsx';
 import Login from './pages/Login.jsx';
 import Home from './pages/Home.jsx';
 import NotFound from './pages/NotFound.jsx';
@@ -81,6 +84,7 @@ export default function App() {
           <FooterClock />
         </main>
       </div>
+      <HelpTip />
     </div>
   );
 }
