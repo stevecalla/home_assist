@@ -312,7 +312,21 @@ export default function Monitor() {
   // On "all meters" the stats still describe YOUR meter, because mixing several endpoints' arrival
   // times into one interval or one SNR average describes no real transmitter.
   const selId = /^[0-9]+$/.test(sel) ? Number(sel) : null;
-  const rtFocus = selId !== null ? rtPackets : rtPackets.filter((p) => p.is_ours);
+  // THE METER IN FOCUS, by id -- NOT by the stored `is_ours` flag.
+  //
+  // `water_packets.is_ours` is written by the collector against ITS meter, so it is one global
+  // answer to "whose is this". Once meters became per-user those stopped being the same question:
+  // for someone granted only a neighbour's meter, is_ours is 0 on every row they are allowed to
+  // see. The table renders from rtPackets and showed 188 rows; the stats and the chart rendered
+  // from this filter and showed nothing -- the same screen reporting both that packets were
+  // arriving and that none had.
+  //
+  // The comment below this always claimed rtFocus "filters to the meter the page is describing".
+  // Now it does.
+  const focusId = selId !== null ? selId : (Number(status.own_meter_id) || null);
+  const rtFocus = focusId === null
+    ? rtPackets
+    : rtPackets.filter((p) => Number(p.meter_id) === focusId);
   // The key is (meter_id, heard_at_utc) — the table's PRIMARY KEY, and stable for the life of the
   // row. It briefly included the array index, which was wrong in a way that only shows up live:
   // rows are newest-first, so ONE arrival at the top shifted every index below it and therefore
@@ -322,8 +336,10 @@ export default function Monitor() {
   const rtGrid = rtPackets.slice().reverse().map((p) => ({
     ...p,
     _key: p.meter_id + '|' + p.heard_at_utc,
-    _highlight: p.is_ours,
-    _dim: !p.is_ours,
+    // Highlight the meter IN FOCUS, not the collector's. Same reason as rtFocus above: a user
+    // restricted to a neighbour's meter would otherwise see every row of their own data dimmed.
+    _highlight: focusId !== null && Number(p.meter_id) === focusId,
+    _dim: focusId !== null && Number(p.meter_id) !== focusId,
   }));
   const rtHeaders = rtCols.map((c) => c.key);
   const rtRows = rtGrid.map((r) => rtCols.map((c) => r[c.key]));
@@ -793,10 +809,13 @@ export default function Monitor() {
                       {rt.meters.map((m) => {
                         const pct = rtExpected ? Math.min(100, (m.packets / rtExpected) * 100) : null;
                         const bd = band_of(rt.quality, 'snr', m.snr_avg);
+                        // `mine` here means the meter this page is about, per the reader's grant --
+                        // not m.is_ours, which is the collector's answer and identical for everyone.
+                        const isFocus = focusId !== null && Number(m.meter_id) === focusId;
                         return (
-                          <tr key={m.meter_id} className={m.is_ours ? 'is-mine' : 'is-other'}>
+                          <tr key={m.meter_id} className={isFocus ? 'is-mine' : 'is-other'}>
                             <td>{m.meter_id}</td>
-                            <td><span className={'w-pill ' + (m.is_ours ? 'sent' : 'failed')}>{m.is_ours ? 'mine' : 'other'}</span></td>
+                            <td><span className={'w-pill ' + (isFocus ? 'sent' : 'failed')}>{isFocus ? 'mine' : 'other'}</span></td>
                             <td>{m.packets.toLocaleString()}</td>
                             <td>{pct === null ? '—' : pct.toFixed(1) + ' %'}</td>
                             <td>{m.rssi_avg === null ? '—' : m.rssi_avg}</td>
