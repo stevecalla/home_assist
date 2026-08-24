@@ -477,7 +477,10 @@
 }
 
 /* ── export toolbar (usat_apps ChartCard) ───────────────────────────────── */
-.w-tools { display: inline-flex; gap: 6px; margin-left: 8px; }
+/* WRAP. This was inline-flex with no wrap, so on a phone the CSV and Table buttons rendered past
+   the right edge of the card and could not be tapped at all — present in the DOM, absent from the
+   device. Nothing in a header may be unreachable because the screen is narrow. */
+.w-tools { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 8px; }
 .w-tools button {
   font: inherit; font-size: 11.5px; padding: 2px 9px; cursor: pointer;
   border: 1px solid var(--line); border-radius: 7px;
@@ -916,3 +919,79 @@ th.w-grid-num { padding: 6px 8px; }
 /* The name leads, the id follows in a lighter weight — present always, never replaced. */
 .w-meter-row .w-meter-name + .w-meter-id { font-weight: 500; color: var(--muted); }
 .w-pick-name { margin-right: 6px; }
+
+
+/* ── touch ───────────────────────────────────────────────────────────────────
+   Everything below is about the hand rather than the eye. The layout already reflowed correctly at
+   these widths; what it did not do was make anything comfortable to hit, or admit that a `title`
+   attribute is invisible on a device with no cursor.
+
+   Kept together at the bottom, and keyed on POINTER rather than width where the question is really
+   "is this a finger?" — a 900px tablet has the same thumbs as a 390px phone. */
+
+@media (max-width: 820px) {
+  .w-tools { width: 100%; margin-left: 0; }
+
+  /* ~35px tall, up from ~23. Chips are the primary control on the Monitor -- range, rows, view --
+     and they sat below every touch-target guideline there is.
+     Selectors match how these are ACTUALLY written: the export toolbar's buttons carry no class of
+     their own and are styled through `.w-tools button`, which at (0,1,1) outranks a bare `.w-chip`.
+     A rule written against a class that does not exist reports success and changes nothing. */
+  .w-chip { padding: 7px 13px; font-size: 12.5px; }
+  .w-tools button { padding: 7px 12px; font-size: 12.5px; }
+  .w-filt button { padding: 8px 13px; }
+  .w-filt button.w-caret { padding: 8px 11px; }
+
+  /* The picker shows "name · id", which for a named meter is wider than a phone. Truncate the NAME
+     rather than let the pill push the row -- the id is the part that identifies, and it is last. */
+  .w-filt button { max-width: 58vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Tighter cells fit roughly two more columns per screen. The packet table is 12 columns wide and
+     no amount of reflowing changes that -- it is a spreadsheet, and it scrolls. */
+  .w-grid-scroll .w-table { font-size: 12px; }
+  .w-grid-scroll .w-table th, .w-grid-scroll .w-table td { padding: 6px 7px; }
+
+  /* Anchor the first column while the rest scrolls under it. Without this you scroll right to read
+     SNR and lose which row you are on -- the numbers are legible and unattributable. */
+  .w-grid-scroll .w-table th:first-child,
+  .w-grid-scroll .w-table td:first-child {
+    position: sticky; left: 0; z-index: 2;
+    background: var(--card);
+    box-shadow: 1px 0 0 var(--line);
+  }
+  .w-grid-scroll .w-table thead th:first-child { z-index: 3; }
+
+  .w-grid-filter { min-width: 0; width: 100%; }
+}
+
+/* The `?` glyphs carry their text in a `title` attribute, which does not exist on a touch device --
+   every metric explanation on the Monitor was unreachable from a phone. HelpTip.jsx turns a tap on
+   one into a sheet; this is what it wears. Pointer-based, not width-based: a mouse still gets the
+   native tooltip and nothing changes. */
+@media (hover: none) {
+  /* The glyph is a deliberate 12px circle and should stay one -- a 40px badge beside every label
+     would shout louder than the numbers it annotates. So grow the TARGET, not the mark: an
+     invisible pad centred on the circle, ~36px square, which is what the thumb actually hits.
+     `inset` is negative, so it overhangs the label text either side -- tapping just beside the ?
+     opening its explanation is the behaviour people expect anyway. */
+  .w-q { position: relative; }
+  .w-q::after { content: ''; position: absolute; inset: -12px; }
+}
+
+.w-help-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 90;
+  background: var(--card); border-top: 1px solid var(--line);
+  border-radius: 14px 14px 0 0; padding: 16px 18px calc(18px + env(safe-area-inset-bottom));
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .28);
+  animation: w-help-up .16s ease-out;
+}
+@keyframes w-help-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .w-help-sheet { animation: none; } }
+.w-help-backdrop { position: fixed; inset: 0; z-index: 89; background: rgba(0, 0, 0, .35); }
+.w-help-title { font-size: 13px; font-weight: 700; margin: 0 0 6px; text-transform: uppercase;
+                letter-spacing: .05em; color: var(--muted); }
+.w-help-body { font-size: 14px; line-height: 1.5; margin: 0; color: var(--ink); }
+.w-help-close {
+  position: absolute; top: 10px; right: 12px; border: 0; background: transparent;
+  color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 6px 8px;
+}
