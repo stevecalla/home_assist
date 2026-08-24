@@ -217,6 +217,27 @@ code {
   color: var(--ink);
 }
 
+/* A divider WITH a word, inside a group. A bare rule would separate the reading pages from the
+   setup ones without saying why, and the reader would be left to infer the distinction from
+   position alone. Recessive on purpose: it labels a boundary, it is not a nav item. */
+.rail-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 8px 2px 22px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rail-subhead::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
 .rail-caret {
   display: inline-block;
   width: 12px;

@@ -57,8 +57,21 @@ export default function SideRail({ user }) {
             <button type="button" className="rail-group" onClick={() => toggle(n.label)} aria-expanded={!isCollapsed}>
               <span className="rail-caret" aria-hidden="true">{isCollapsed ? '▸' : '▾'}</span>{n.label}
             </button>
-            {!isCollapsed && items.map(function (it) {
-              return <NavLink key={it.path} to={it.path} className={({ isActive }) => 'rail-link rail-sub' + (isActive ? ' on' : '')}>{ico(it.icon)}{it.label}</NavLink>;
+            {/* A sub-heading appears when `section` CHANGES, and only if there is still something
+                under it after the access filter. Rendering it unconditionally would leave a "Setup"
+                label with nothing beneath it for a user who holds the read panels and none of the
+                setup ones — a heading for pages they cannot see. */}
+            {!isCollapsed && items.map(function (it, i) {
+              const prev = i > 0 ? items[i - 1].section : undefined;
+              const head = it.section && it.section !== prev
+                ? <div className="rail-subhead" key={it.path + ':h'}>{it.section}</div>
+                : null;
+              return (
+                <div key={it.path}>
+                  {head}
+                  <NavLink to={it.path} className={({ isActive }) => 'rail-link rail-sub' + (isActive ? ' on' : '')}>{ico(it.icon)}{it.label}</NavLink>
+                </div>
+              );
             })}
           </div>
         );

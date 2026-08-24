@@ -134,6 +134,36 @@ test('scope “mine” pins one meter, and a junk id matches nothing instead of 
 
 // ── other_ids: the sidebar that used to leak ───────────────────────────────────────────────────
 
+// ── the raw decoder buffer: the last place a neighbour was readable ────────────────────────────
+
+test('raw samples are filtered to the grant, and unparseable lines fail CLOSED', function () {
+  // water_raw_samples stores whole rtl_433 lines and `reason` includes 'other_meter', so the buffer
+  // contains neighbours by design. Diagnostics printed it verbatim — a meter you were not granted,
+  // readable in the decoder's own words underneath a chart that correctly refused to draw it.
+  const rows = [
+    { line: '{"model":"Badger-ORION","id":222,"volume_gal":100}' },
+    { line: '{"model":"Badger-ORION","id":111,"volume_gal":796071}' },
+    { line: 'not json at all' },
+    { line: '{"model":"Badger-ORION","volume_gal":5}' },        // no id
+  ];
+  const kept = water_api.filter_raw_samples(rows, [222]);
+  assert.strictEqual(kept.length, 1);
+  assert.match(kept[0].line, /"id":222/);
+
+  assert.strictEqual(water_api.filter_raw_samples(rows, 'all').length, 4, 'unrestricted sees all');
+  assert.strictEqual(water_api.filter_raw_samples(rows, []).length, 0, 'empty grant sees none');
+});
+
+test('the Reference page reports the user’s own meter, not the collector’s', function () {
+  // That page exists to be read. Printing cfg.meter_id there would disclose the id of a meter the
+  // reader is not granted, on the one page guaranteed to be looked at.
+  const api = fs.readFileSync(require.resolve('../modules/water/api'), 'utf8');
+  const i = api.indexOf("app.get('/api/water/reference'");
+  assert.ok(i !== -1);
+  const seg = api.slice(i, i + 2200);
+  assert.match(seg, /meter_access\.primary\(req\.user, req\.role, cfg\.meter_id\)/);
+});
+
 // ── the admin UI ───────────────────────────────────────────────────────────────────────────────
 
 test('the admin page can edit meter grants, and shows the meter list in every mode', function () {

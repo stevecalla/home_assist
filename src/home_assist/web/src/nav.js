@@ -18,13 +18,17 @@ const WaterReference = lazy(() => import('./modules/water/Reference.jsx'));
 export const NAV = [
   {
     type: 'group', label: 'Water', items: [
+      // `section` is a rail HEADING only. Reading pages first, then the ones that change what the
+      // collector does. Both kinds are the water module -- moving setup to Admin would make Admin a
+      // drawer for every module's config and break the module boundary the whole app derives from.
+      // The rail just stops implying that Monitor and Settings are the same kind of page.
       { label: 'Monitor', path: '/water/monitor', panel: 'water-monitor', icon: '💧', Component: WaterMonitor },
       { label: 'History', path: '/water/history', panel: 'water-history', icon: '📈', Component: WaterHistory },
       { label: 'Alerts', path: '/water/alerts', panel: 'water-alerts', icon: '🔔', Component: WaterAlerts },
-      { label: 'Settings', path: '/water/settings', panel: 'water-settings', icon: '⚙', Component: WaterSettings },
-      { label: 'Meters', path: '/water/meters', panel: 'water-meters', icon: '🏠', Component: WaterMeters },
-      { label: 'Diagnostics', path: '/water/diagnostics', panel: 'water-diagnostics', icon: '📡', Component: WaterDiagnostics },
       { label: 'Reference', path: '/water/reference', panel: 'water-reference', icon: '📖', Component: WaterReference },
+      { label: 'Settings', path: '/water/settings', panel: 'water-settings', icon: '⚙', Component: WaterSettings, section: 'Setup' },
+      { label: 'Meters', path: '/water/meters', panel: 'water-meters', icon: '🏠', Component: WaterMeters, section: 'Setup' },
+      { label: 'Diagnostics', path: '/water/diagnostics', panel: 'water-diagnostics', icon: '📡', Component: WaterDiagnostics, section: 'Setup' },
     ],
   },
   {
