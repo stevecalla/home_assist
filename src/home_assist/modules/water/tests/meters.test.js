@@ -74,11 +74,21 @@ test('every stat on the card follows the selected meter, not "is it mine"', func
     require.resolve('../../../web/src/modules/water/Monitor.jsx'), 'utf8');
 
   assert.match(ui, /const selId = /, 'the card must know which meter is selected');
-  assert.match(ui, /const rtFocus = selId !== null \? rtPackets : rtPackets\.filter/,
-    'the focus set is the selection, falling back to ours only when not one meter');
-  assert.ok(ui.indexOf('rtMine') === -1,
-    'rtMine is the old "is it mine" filter and must be gone -- it is what produced 0 transmissions '
-    + 'and a blank SNR while the table was full of rows');
+  // Focus is decided by METER ID -- the selection, else the user's own meter. Never by the stored
+  // is_ours flag: the collector writes that against ITS meter, so for a user granted only a
+  // neighbour's it is 0 on every row they may see. This test used to pin that very filter while
+  // being named for the opposite, and the bug it let through was the exact one it describes above:
+  // 188 rows in the table, 0 transmissions and a blank SNR in the stats over it.
+  assert.match(ui, /const focusId = selId !== null \? selId : \(Number\(status\.own_meter_id\) \|\| null\)/,
+    'focus falls back to the USER\u2019s own meter, not the collector\u2019s');
+  assert.match(ui, /rtPackets\.filter\(\(p\) => Number\(p\.meter_id\) === focusId\)/,
+    'the focus set is filtered by meter id');
+  // Comments stripped first: this file EXPLAINS why is_ours is wrong here, and an assertion that
+  // cannot tell an explanation from the mistake it describes would forbid documenting it.
+  const code = ui.split('\n').filter(function (l) { return l.trim().indexOf('//') !== 0; }).join('\n');
+  assert.ok(!/\bp\.is_ours\b/.test(code) && !/\bm\.is_ours\b/.test(code),
+    'no per-row is_ours may drive what this page shows -- it is a global answer to a per-user question');
+  assert.ok(ui.indexOf('rtMine') === -1, 'rtMine is the older name for the same mistake');
 
   for (const bound of ['cardOdo', 'cardSecs', 'cardLastAt', 'cardTitle']) {
     assert.ok(ui.indexOf(bound) !== -1, bound + ' must exist so the card follows the selection');
