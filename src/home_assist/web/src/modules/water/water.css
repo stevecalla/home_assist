@@ -660,14 +660,23 @@
   min-width: 180px;
   display: flex;
   flex-direction: column;
-  background: var(--surface, #1b2130);
+  /* --panel, NOT --surface. There is no --surface token in this app and never was, so this read
+     `var(--surface, #1b2130)` -- a fallback that was the ONLY value it ever had. In dark mode the
+     hardcoded navy happened to match and the bug was invisible; in light mode it rendered a dark
+     box holding dark inherited text, i.e. an empty-looking menu.
+     A var() whose token is undefined is not a theme-aware colour with a safety net. It is a
+     hardcoded colour wearing the syntax of one. */
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+  /* Lighter than the old .35: that was tuned against a dark panel and reads as a smudge on white. */
+  box-shadow: 0 6px 20px rgba(8, 34, 64, .18);
 }
 .w-pick-menu button {
-  border: 0; border-radius: 0; background: transparent; color: inherit;
+  /* Explicit, not `inherit`. Inheriting meant the menu's legibility depended on whatever it happened
+     to be mounted inside -- which is how it ended up dark-on-dark. */
+  border: 0; border-radius: 0; background: transparent; color: var(--ink);
   font: inherit; font-size: 12px; text-align: left;
   padding: 7px 10px; cursor: pointer; white-space: nowrap;
   display: flex; align-items: center; gap: 8px;
@@ -850,7 +859,9 @@ th.w-grid-num { padding: 6px 8px; }
   cursor: pointer; font-size: 12px; color: var(--w-axis);
   padding: 2px 0; user-select: none;
 }
-.w-alert-detail > summary:hover { color: var(--text); }
+/* --ink. There is no --text token, and with no fallback the declaration was invalid at
+   computed-value time -- the hover resolved to `unset` and changed nothing at all. */
+.w-alert-detail > summary:hover { color: var(--ink); }
 .w-alert-detail table.w-table.small { font-size: 12px; margin-top: 6px; max-width: 420px; }
 .w-alert-detail table.w-table.small td,
 .w-alert-detail table.w-table.small th { padding: 3px 8px; }

@@ -92,3 +92,42 @@ test('nothing in the touch block leaks into the desktop layout', function () {
   // The sheet's own styling is deliberately unguarded — it only renders when HelpTip mounts it.
   assert.match(block, /\.w-help-sheet \{/);
 });
+
+
+test('no colour is painted from a token that does not exist', function () {
+  // THE BUG THIS CATCHES. The meter dropdown was `background: var(--surface, #1b2130)`. There is no
+  // --surface token in this app and never has been, so that fallback was the ONLY value it ever
+  // had -- a hardcoded dark navy wearing the syntax of a theme-aware colour. In dark mode it
+  // happened to match the panel and nobody saw it. In light mode it rendered a dark box holding
+  // dark inherited text: a menu that opened and appeared empty.
+  //
+  // A var() with an undefined token is not a colour with a safety net. It is a constant.
+  // Comments stripped first — this very file explains the bug by quoting the broken
+  // declaration, and a scanner that cannot tell an explanation from the mistake it describes
+  // would forbid documenting it. (Second time this exact trap has come up.)
+  const css = (styles + '\n' + water).replace(/\/\*[\s\S]*?\*\//g, '');
+  const defined = new Set();
+  const declRe = /(--[a-z0-9-]+)\s*:/g;
+  let m;
+  while ((m = declRe.exec(css))) defined.add(m[1]);
+
+  const used = [];
+  const useRe = /var\((--[a-z0-9-]+)\s*(,[^)]*)?\)/g;
+  while ((m = useRe.exec(css))) used.push({ name: m[1], fallback: (m[2] || '').trim() });
+
+  const undef = used.filter((u) => !defined.has(u.name));
+  // A fallback is legitimate when the token is defined SOMEWHERE (--w-series lives on .w-root, and
+  // these rules also render outside it). It is a bug when the token is defined nowhere at all.
+  assert.deepStrictEqual(undef.map((u) => u.name), [],
+    'these tokens are never defined, so their fallbacks are the only value: '
+    + undef.map((u) => u.name + ' ' + u.fallback).join('; '));
+});
+
+test('the meter dropdown follows the theme', function () {
+  const menu = water.slice(water.indexOf('.w-pick-menu {'), water.indexOf('.w-pick-menu button + button'));
+  assert.match(menu, /background: var\(--panel\)/, 'the panel token, which both themes define');
+  assert.ok(menu.indexOf('--surface') === -1 || menu.indexOf('background: var(--surface') === -1,
+    'never paint from --surface');
+  // Explicit text colour: inheriting made legibility depend on wherever the menu was mounted.
+  assert.match(menu, /color: var\(--ink\)/);
+});
