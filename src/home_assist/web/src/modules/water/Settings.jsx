@@ -98,7 +98,7 @@ export default function Settings() {
             const changed = Object.prototype.hasOwnProperty.call(draft, f.name);
             const value = changed ? draft[f.name] : f.value;
             return (
-              <div className="w-field" key={f.name}>
+              <div className={'w-field' + (f.type === 'string' ? ' is-text' : '')} key={f.name}>
                 <label className="w-field-label" htmlFor={'f-' + f.name}>
                   {f.label}{changed ? <span className="w-dirty"> •</span> : null}
                   <div className="muted small" style={{ fontWeight: 400 }}><code>{f.name}</code></div>
@@ -121,15 +121,34 @@ export default function Settings() {
                     <span className="w-toggle-word">{Number(value) ? 'On' : 'Off'}</span>
                   </span>
                 ) : (
+                  /* A TEXTAREA for text values, an input for numbers.
+                     Not decoration: these fields hold email lists, ntfy URLs and addresses that are
+                     routinely longer than the box. In a 160px input "water-alerts@kidderwise.org"
+                     renders as "water-alerts@kidderwi" -- you cannot read what you are about to
+                     save, on the page whose whole job is showing what is configured. A textarea
+                     wraps AND drags, so a three-address list can be opened up to be read.
+                     Numbers keep their input: a 400px box holding "5" is its own kind of wrong. */
+                  f.type === 'string' ? (
+                    <textarea
+                      id={'f-' + f.name}
+                      rows={1}
+                      spellCheck={false}
+                      value={value === null || value === undefined ? '' : value}
+                      /* Newlines stripped: this is a one-line value that happens to wrap, and a
+                         stray Enter would otherwise be saved into the middle of an address list. */
+                      onChange={(e) => setDraft((d) => Object.assign({}, d, { [f.name]: e.target.value.replace(/\n/g, '') }))}
+                    />
+                  ) : (
                   <input
                     id={'f-' + f.name}
-                    type={f.type === 'string' ? 'text' : 'number'}
+                    type="number"
                     step={f.type === 'float' ? 'any' : 1}
                     min={f.min}
                     max={f.max}
                     value={value === null || value === undefined ? '' : value}
                     onChange={(e) => setDraft((d) => Object.assign({}, d, { [f.name]: e.target.value }))}
                   />
+                  )
                 )}
                 <div className="w-field-help">{f.help}</div>
               </div>
