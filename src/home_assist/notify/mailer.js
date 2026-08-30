@@ -25,6 +25,17 @@ function config() {
     port: Number(process.env.EMAIL_PORT) || 587,
     secure: String(process.env.EMAIL_SECURE || '').toLowerCase() === 'true', // true only for 465
     sender: process.env.EMAIL_SENDER || '',
+    // The SMTP LOGIN, which is not always the From address. Gmail is the outlier where they are the
+    // same, and this app was written against Gmail — so the login was simply assumed to be the
+    // sender. Every transactional provider separates them: Resend's username is the literal string
+    // "resend", Mailgun's is postmaster@<domain>, SES issues generated credentials. Defaults to the
+    // sender, so a Gmail .env keeps working untouched.
+    user: process.env.EMAIL_USER || process.env.EMAIL_SENDER || '',
+    // The DISPLAY NAME beside the From address. Defaults to the machine, which is genuinely useful
+    // when the only recipient is you -- "which box sent this?" is answered without opening it. It
+    // is the wrong answer the moment a NEIGHBOUR is the recipient: "home_assist (steve-calla-
+    // Latitude-7420)" reads as technical noise at best and as something to report as spam at worst.
+    from_name: process.env.EMAIL_FROM_NAME || '',
     password: process.env.EMAIL_PASSWORD || '',
     recipient: process.env.EMAIL_RECIPIENT || process.env.EMAIL_SENDER || '',
   };
@@ -54,7 +65,7 @@ function transporter() {
     connectionTimeout: SMTP_TIMEOUT_MS,   // TCP connect
     greetingTimeout: SMTP_TIMEOUT_MS,     // waiting for the server banner
     socketTimeout: SMTP_TIMEOUT_MS,       // inactivity mid-conversation
-    auth: { user: c.sender, pass: c.password },
+    auth: { user: c.user, pass: c.password },
   });
   return _transporter;
 }
@@ -146,7 +157,7 @@ async function send(mail) {
 
   return with_deadline(
     t.sendMail({
-      from: { name: mail.from_name || ('home_assist (' + os.hostname() + ')'), address: c.sender },
+      from: { name: mail.from_name || c.from_name || ('home_assist (' + os.hostname() + ')'), address: c.sender },
       to: good,
       subject: mail.subject,
       text: mail.text,
