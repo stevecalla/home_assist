@@ -163,14 +163,55 @@ function daily_summary(hours, now, cfg, tz) {
   const keys = [];
   for (let i = 1; i <= 24; i++) keys.push(time.hour_key_offset(now, i, tz));
   const { total } = sum_hours(hours, keys);
+
+  // The OVERNIGHT slice of those 24 hours. A daily total is one number and says nothing about
+  // shape; the overnight figure is the one that separates a heavy laundry day from a leak, and it
+  // is the number this whole module exists to watch.
+  const night_keys = keys.filter(function (k) {
+    const h = Number(k.slice(11, 13));
+    return h >= cfg.overnight_start_hour && h < cfg.overnight_end_hour;
+  });
+  const night = sum_hours(hours, night_keys).total;
+
+  // Yesterday against the previous SEVEN full days, so the summary carries a comparison rather
+  // than an isolated figure. 147 gallons means nothing on its own; "147, and you average 103"
+  // means something. Days with no buckets at all are excluded -- an unrecorded day averaged in as
+  // zero would drag the baseline down and make every ordinary day look excessive.
+  const prior = [];
+  for (let d = 2; d <= 8; d++) {
+    const day_keys = [];
+    for (let h = 0; h < 24; h++) {
+      day_keys.push(time.day_key_offset(now, d, tz) + 'T' + String(h).padStart(2, '0'));
+    }
+    const seen = day_keys.some(function (k) { return hours[k] !== undefined; });
+    if (seen) prior.push(sum_hours(hours, day_keys).total);
+  }
+  const avg = prior.length ? prior.reduce(function (a, b) { return a + b; }, 0) / prior.length : null;
+
+  let message = 'Yesterday: ' + total.toFixed(0) + ' gal';
+  if (night > 0) message += ', ' + night.toFixed(0) + ' of it overnight';
+  if (avg !== null) {
+    const pct = avg > 0 ? Math.round(((total - avg) / avg) * 100) : null;
+    message += '. Your ' + prior.length + '-day average is ' + avg.toFixed(0) + ' gal';
+    if (pct !== null && Math.abs(pct) >= 10) {
+      message += ' — ' + (pct > 0 ? 'up ' : 'down ') + Math.abs(pct) + '%';
+    }
+  }
+  message += '.';
+
   return {
     key: 'summary:' + time.day_key(now, tz),
     kind: 'summary',
     severity: 'low',
     tags: 'bar_chart',
     cooldown_min: 20 * 60,
-    message: 'Last 24h: ' + total.toFixed(0) + ' gallons.',
-    detail: { total },
+    message: message,
+    detail: {
+      total_gal: total,
+      overnight_gal: night,
+      avg_gal: avg,
+      avg_over_days: prior.length,
+    },
   };
 }
 

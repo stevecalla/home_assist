@@ -411,9 +411,16 @@ async function create_collector(options) {
           if (alert.kind === 'stale') continue;          // belt and braces -- see above
           const r = await alerts.dispatch(alert, cfg, {
             meter_id: pid,
+            // The NAME, so the subject line says "4528 Sprucedale" rather than an eight-digit id.
+            // For a neighbour an id identifies nothing; for you with four meters it is a lookup.
+            meter_name: m.meter_name || '',
             notify: !!m.notify,
             email_to: meters.recipients_for(m, cfg.alert_email_to),
             last_gallons: (other_last.get(pid) || {}).gallons ?? null,
+            // Month context on every alert. Resolved HERE rather than in alerts.js so that module
+            // stays a formatter with no queries of its own, and build_email remains testable with a
+            // plain object.
+            months: await readings.month_totals(pid).catch(function () { return null; }),
           });
           if (r.sent) log('ALERT [' + alert.kind + '] meter ' + pid + ' ' + alert.message + '  (' + r.note + ')');
           if (alert.kind === 'run') {
@@ -462,6 +469,8 @@ async function create_collector(options) {
       }
       const ctx = {
         meter_id: meter_id,
+        meter_name: (owned_meter_row && owned_meter_row.meter_name) || '',
+        months: await readings.month_totals(meter_id).catch(function () { return null; }),
         // Your own meter can have a dedicated address list too -- useful when the house alerts go
         // to two people but a second property should not.
         email_to: meters.recipients_for(owned_meter_row, cfg.alert_email_to),
