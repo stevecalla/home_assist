@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { api } from '../../lib/api.js';
 import { num } from '../../lib/num.js';
 import CollapsibleCard from '../../components/CollapsibleCard.jsx';
+import CardStack from '../../components/CardStack.jsx';
 import BarChart from '../water/BarChart.jsx';
 import './metrics.css';
 
@@ -108,148 +109,161 @@ export default function Metrics() {
         </div>
       ) : null}
 
-      {/* ── ISSUES FIRST ───────────────────────────────────────────────────────────────────── */}
-      <CollapsibleCard
-        title="Issues"
-        sub="Broken links, refused access, and errors. The reason this page exists."
-      >
-        <div className="m-tiles">
-          <Tile label="Errors" value={t.errors} alarm={t.errors > 0} />
-          <Tile label="Not found (404)" value={t.not_found} alarm={t.not_found > 0} />
-          <Tile label="Access denied (403)" value={t.not_authorized} alarm={t.not_authorized > 0} />
-        </div>
+      {/* Issues is first BY DEFAULT, because that is the reason this page exists -- but the
+          order is the reader's. Someone watching adoption wants Usage at the top; someone chasing a
+          fault wants Issues. See components/CardStack.jsx. */}
+      <CardStack
+        storageKey="metrics"
+        items={[
+          { id: 'issues', label: 'Issues', node: (
+          <CollapsibleCard
+            title="Issues"
+            sub="Broken links, refused access, and errors. The reason this page exists."
+          >
+            <div className="m-tiles">
+              <Tile label="Errors" value={t.errors} alarm={t.errors > 0} />
+              <Tile label="Not found (404)" value={t.not_found} alarm={t.not_found > 0} />
+              <Tile label="Access denied (403)" value={t.not_authorized} alarm={t.not_authorized > 0} />
+            </div>
 
-        <Table
-          caption="Errors"
-          empty="No errors recorded in this window."
-          headers={['Type', 'Message', 'Count', 'Last seen']}
-          rows={data.errors.map((e) => [e.type, e.message || '—', num(e.n), e.last_mtn || '—'])}
-        />
-        <Table
-          caption="Links that 404'd"
-          // A 404 on an INTERNAL link is a bug in the app, not a typo by the user -- it means a
-          // link points somewhere that no longer exists. That is the one thing on this page worth
-          // acting on the same day.
-          empty="No broken links. Every path requested resolved to a page."
-          headers={['Path', 'Times']}
-          rows={data.top_not_found.map((r) => [r.path, num(r.n)])}
-        />
-        <Table
-          caption="Access denied"
-          empty="Nobody was refused a page in this window."
-          headers={['Panel', 'Who', 'Times']}
-          rows={data.access_denied.map((r) => [r.panel, r.actor, num(r.n)])}
-        />
-      </CollapsibleCard>
+            <Table
+              caption="Errors"
+              empty="No errors recorded in this window."
+              headers={['Type', 'Message', 'Count', 'Last seen']}
+              rows={data.errors.map((e) => [e.type, e.message || '—', num(e.n), e.last_mtn || '—'])}
+            />
+            <Table
+              caption="Links that 404'd"
+              // A 404 on an INTERNAL link is a bug in the app, not a typo by the user -- it means a
+              // link points somewhere that no longer exists. That is the one thing on this page worth
+              // acting on the same day.
+              empty="No broken links. Every path requested resolved to a page."
+              headers={['Path', 'Times']}
+              rows={data.top_not_found.map((r) => [r.path, num(r.n)])}
+            />
+            <Table
+              caption="Access denied"
+              empty="Nobody was refused a page in this window."
+              headers={['Panel', 'Who', 'Times']}
+              rows={data.access_denied.map((r) => [r.panel, r.actor, num(r.n)])}
+            />
+          </CollapsibleCard>
 
-      {/* ── usage ──────────────────────────────────────────────────────────────────────────── */}
-      <CollapsibleCard title="Usage" sub="Who opened what, and when." defaultOpen={false}>
-        <div className="m-tiles">
-          <Tile label="Panel views" value={t.panel_views} />
-          <Tile label="Sessions" value={t.sessions} />
-          <Tile label="Browsers" value={t.visitors} help="Distinct browsers, not people — a phone and a laptop are two." />
-          <Tile label="Sign-ins" value={t.logins} />
-        </div>
+          ) },
+          { id: 'usage', label: 'Usage', node: (
+          <CollapsibleCard title="Usage" sub="Who opened what, and when." defaultOpen={false}>
+            <div className="m-tiles">
+              <Tile label="Panel views" value={t.panel_views} />
+              <Tile label="Sessions" value={t.sessions} />
+              <Tile label="Browsers" value={t.visitors} help="Distinct browsers, not people — a phone and a laptop are two." />
+              <Tile label="Sign-ins" value={t.logins} />
+            </div>
 
-        <h4 className="m-h4">By day</h4>
-        <BarChart
-          data={data.by_day.map((d) => ({
-            key: d.day, label: String(d.day).slice(5), value: d.views,
-            // Every day in the window is drawn, so a day with no activity is a visible gap rather
-            // than an absent bar. Same rule as the water charts: no data and zero are not the same.
-            observed: true, highlight: d.errors > 0,
-          }))}
-          unit="views" height={140}
-          formatTip={(d) => `${d.key} — ${num(d.value)} views`}
-          emptyMessage="No activity in this window."
-        />
+            <h4 className="m-h4">By day</h4>
+            <BarChart
+              data={data.by_day.map((d) => ({
+                key: d.day, label: String(d.day).slice(5), value: d.views,
+                // Every day in the window is drawn, so a day with no activity is a visible gap rather
+                // than an absent bar. Same rule as the water charts: no data and zero are not the same.
+                observed: true, highlight: d.errors > 0,
+              }))}
+              unit="views" height={140}
+              formatTip={(d) => `${d.key} — ${num(d.value)} views`}
+              emptyMessage="No activity in this window."
+            />
 
-        <h4 className="m-h4">By hour of day <span className="muted small">({data.tz})</span></h4>
-        <BarChart
-          data={data.by_hour.map((h) => ({
-            key: String(h.hour), label: String(h.hour).padStart(2, '0'), value: h.n, observed: true,
-          }))}
-          unit="events" height={120}
-          formatTip={(d) => `${d.label}:00 — ${num(d.value)} events`}
-          emptyMessage="No activity in this window."
-        />
+            <h4 className="m-h4">By hour of day <span className="muted small">({data.tz})</span></h4>
+            <BarChart
+              data={data.by_hour.map((h) => ({
+                key: String(h.hour), label: String(h.hour).padStart(2, '0'), value: h.n, observed: true,
+              }))}
+              unit="events" height={120}
+              formatTip={(d) => `${d.label}:00 — ${num(d.value)} events`}
+              emptyMessage="No activity in this window."
+            />
 
-        <Table
-          caption="By panel"
-          empty="No panel views recorded."
-          headers={['Panel', 'Views', 'Events']}
-          rows={data.by_panel.map((r) => [r.panel, num(r.views), num(r.events)])}
-        />
-        <Table
-          caption="By event"
-          empty="No events."
-          headers={['Event', 'Count']}
-          rows={data.by_event.map((r) => [r.event, num(r.n)])}
-        />
-      </CollapsibleCard>
+            <Table
+              caption="By panel"
+              empty="No panel views recorded."
+              headers={['Panel', 'Views', 'Events']}
+              rows={data.by_panel.map((r) => [r.panel, num(r.views), num(r.events)])}
+            />
+            <Table
+              caption="By event"
+              empty="No events."
+              headers={['Event', 'Count']}
+              rows={data.by_event.map((r) => [r.event, num(r.n)])}
+            />
+          </CollapsibleCard>
+          ) },
+          { id: 'sessions', label: 'Sessions', node: (
+          <CollapsibleCard title="Sessions" sub="The most recent sittings." defaultOpen={false}>
+            <Table
+              empty="No sessions in this window."
+              headers={['Session', 'Who', 'Device', 'Theme', 'Timezone', 'Events', 'Started', 'Last']}
+              rows={data.sessions.map((s) => [
+                s.session_id, s.actor, s.viewport, s.theme, s.client_tz || '—',
+                num(s.events), s.started_mtn || '—', s.last_mtn || '—',
+              ])}
+            />
+          </CollapsibleCard>
+          ) },
+          { id: 'recent', label: 'Recent events', node: (
+          <CollapsibleCard title="Recent events" sub="The raw tail, newest first — for reading one incident." defaultOpen={false}>
+            {!tail ? (
+              <button className="btn" onClick={loadTail}>Load the last 200 events</button>
+            ) : (
+              <Table
+                empty="Nothing recorded yet."
+                headers={['When', 'Event', 'Who', 'Panel', 'View / path', 'Error']}
+                rows={tail.map((r) => [
+                  r.created_at_mtn, r.event_name, r.actor || 'anon', r.panel || '—',
+                  r.view || r.page_path || '—',
+                  r.error_type ? r.error_type + (r.error_msg ? ': ' + r.error_msg : '') : '—',
+                ])}
+              />
+            )}
+          </CollapsibleCard>
+          ) },
+          { id: 'health', label: 'Table health', node: (
+          <CollapsibleCard title="Table health" sub="Size, span, and what can be deleted." defaultOpen={false}>
+            <div className="m-tiles">
+              <Tile label="Rows" value={data.health.rows} />
+              <Tile label="Megabytes" value={data.health.mb} dp={2} />
+              <Tile label="Test rows" value={data.health.test_rows} />
+            </div>
+            <p className="muted small">
+              Spans {data.health.first_mtn || '—'} to {data.health.last_mtn || '—'}. Retention keeps the
+              current and prior calendar year ({data.health.keep_years} years).
+            </p>
+            {data.health.by_year && data.health.by_year.length ? (
+              <Table headers={['Year', 'Rows']} empty=""
+                     rows={data.health.by_year.map((y) => [String(y.year), num(y.rows)])} />
+            ) : null}
 
-      <CollapsibleCard title="Sessions" sub="The most recent sittings." defaultOpen={false}>
-        <Table
-          empty="No sessions in this window."
-          headers={['Session', 'Who', 'Device', 'Theme', 'Timezone', 'Events', 'Started', 'Last']}
-          rows={data.sessions.map((s) => [
-            s.session_id, s.actor, s.viewport, s.theme, s.client_tz || '—',
-            num(s.events), s.started_mtn || '—', s.last_mtn || '—',
-          ])}
-        />
-      </CollapsibleCard>
-
-      <CollapsibleCard title="Recent events" sub="The raw tail, newest first — for reading one incident." defaultOpen={false}>
-        {!tail ? (
-          <button className="btn" onClick={loadTail}>Load the last 200 events</button>
-        ) : (
-          <Table
-            empty="Nothing recorded yet."
-            headers={['When', 'Event', 'Who', 'Panel', 'View / path', 'Error']}
-            rows={tail.map((r) => [
-              r.created_at_mtn, r.event_name, r.actor || 'anon', r.panel || '—',
-              r.view || r.page_path || '—',
-              r.error_type ? r.error_type + (r.error_msg ? ': ' + r.error_msg : '') : '—',
-            ])}
-          />
-        )}
-      </CollapsibleCard>
-
-      <CollapsibleCard title="Table health" sub="Size, span, and what can be deleted." defaultOpen={false}>
-        <div className="m-tiles">
-          <Tile label="Rows" value={data.health.rows} />
-          <Tile label="Megabytes" value={data.health.mb} dp={2} />
-          <Tile label="Test rows" value={data.health.test_rows} />
-        </div>
-        <p className="muted small">
-          Spans {data.health.first_mtn || '—'} to {data.health.last_mtn || '—'}. Retention keeps the
-          current and prior calendar year ({data.health.keep_years} years).
-        </p>
-        {data.health.by_year && data.health.by_year.length ? (
-          <Table headers={['Year', 'Rows']} empty=""
-                 rows={data.health.by_year.map((y) => [String(y.year), num(y.rows)])} />
-        ) : null}
-
-        {/* Destructive, and admin-only on the server whatever the panel grant says. Three named
-            modes rather than one button with a dropdown, because the difference between "delete my
-            test rows" and "delete everything" should not be one wrong click. */}
-        <div className="m-purge">
-          <button className="btn" disabled={busy || !data.health.test_rows}
-                  onClick={() => purge('test')}
-                  title="Delete only the rows written while ?metrics_test=1 was set">
-            Delete {num(data.health.test_rows)} test row(s)
-          </button>
-          <button className="btn" disabled={busy} onClick={() => purge('old')}
-                  title={'Delete anything older than the last ' + data.health.keep_years + ' calendar years'}>
-            Delete old years
-          </button>
-          <button className="btn danger" disabled={busy}
-                  onClick={() => { if (window.confirm('Delete EVERY metrics row? This cannot be undone.')) purge('all'); }}>
-            Delete everything
-          </button>
-          {msg ? <span className={msg.ok ? 'w-meter-ok' : 'err'}>{msg.text}</span> : null}
-        </div>
-      </CollapsibleCard>
+            {/* Destructive, and admin-only on the server whatever the panel grant says. Three named
+                modes rather than one button with a dropdown, because the difference between "delete my
+                test rows" and "delete everything" should not be one wrong click. */}
+            <div className="m-purge">
+              <button className="btn" disabled={busy || !data.health.test_rows}
+                      onClick={() => purge('test')}
+                      title="Delete only the rows written while ?metrics_test=1 was set">
+                Delete {num(data.health.test_rows)} test row(s)
+              </button>
+              <button className="btn" disabled={busy} onClick={() => purge('old')}
+                      title={'Delete anything older than the last ' + data.health.keep_years + ' calendar years'}>
+                Delete old years
+              </button>
+              <button className="btn danger" disabled={busy}
+                      onClick={() => { if (window.confirm('Delete EVERY metrics row? This cannot be undone.')) purge('all'); }}>
+                Delete everything
+              </button>
+              {msg ? <span className={msg.ok ? 'w-meter-ok' : 'err'}>{msg.text}</span> : null}
+            </div>
+          </CollapsibleCard>
+          ) },
+        ]}
+      />
     </div>
   );
 }

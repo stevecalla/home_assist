@@ -14,9 +14,18 @@ const path = require('path');
 const data_dir = require('../data_dir');
 
 // Platform panels — owned by the shell itself, not by any feature module.
+//
+// `order` sorts a panel WITHIN its group. It exists because the Admin group is contributed to by
+// both the shell (this list) and a module (metrics), and the catalog used to append every platform
+// panel after every module panel — so the access card listed "Metrics, Users & access" while the
+// side rail listed "Users & access, Metrics". The list you tick and the list you navigate must be
+// in the same order, or you are editing one mental model against another. Lower sorts first;
+// anything without an `order` gets DEFAULT_ORDER and keeps its declared position.
 const PLATFORM_PANELS = [
-  { key: 'admin', label: 'Users & access', group: 'Admin' },
+  { key: 'admin', label: 'Users & access', group: 'Admin', order: 10 },
 ];
+
+const DEFAULT_ORDER = 100;
 
 // Sensitive panels excluded from the default 'all' grant — they need an explicit per-user grant
 // (admins always see everything regardless). 'admin' is additionally hard-gated in is_allowed().
@@ -69,20 +78,45 @@ function module_panels() {
   try { return registry.panels(); } catch (e) { return []; }
 }
 
+/**
+ * The catalog, in the order it should be READ: grouped, and within a group in `order` then
+ * declaration order.
+ *
+ * Groups keep the order they are first encountered — modules in registry order, then any group only
+ * the shell contributes to. The sort inside a group is stable, so the water panels keep the
+ * deliberate sequence their manifest declares (reading pages, then the three that change things).
+ */
 function catalog() {
   const out = [];
   const seen = {};
-  module_panels().forEach(function (p) {
+  const push = function (p) {
     if (seen[p.key]) return;
     seen[p.key] = 1;
-    out.push({ key: p.key, label: p.label, group: p.group || null });
+    out.push({
+      key: p.key, label: p.label, group: p.group || null,
+      order: p.order === undefined ? DEFAULT_ORDER : Number(p.order),
+      seq: out.length,
+    });
+  };
+  module_panels().forEach(push);
+  PLATFORM_PANELS.forEach(push);
+
+  // Group order = first appearance. Then sort inside each group.
+  const groups = [];
+  const bucket = {};
+  out.forEach(function (p) {
+    const k = p.group || 'General';
+    if (!bucket[k]) { bucket[k] = []; groups.push(k); }
+    bucket[k].push(p);
   });
-  PLATFORM_PANELS.forEach(function (p) {
-    if (seen[p.key]) return;
-    seen[p.key] = 1;
-    out.push({ key: p.key, label: p.label, group: p.group || null });
+  const sorted = [];
+  groups.forEach(function (k) {
+    bucket[k].sort(function (a, b) { return a.order - b.order || a.seq - b.seq; });
+    bucket[k].forEach(function (p) {
+      sorted.push({ key: p.key, label: p.label, group: p.group });
+    });
   });
-  return out;
+  return sorted;
 }
 
 function keys() { return catalog().map(function (p) { return p.key; }); }
