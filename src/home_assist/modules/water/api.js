@@ -119,6 +119,34 @@ function filter_raw_samples(rows, allowed) {
   });
 }
 
+/**
+ * Total, average, and how much of the window was actually recorded.
+ *
+ * `observed_days` is not decoration. A month missing three days has an understated TOTAL, and an
+ * average taken over the calendar length would understate it a second time -- so the mean is over
+ * the days that HAVE data, and `complete` says whether that distinction mattered. Same rule the
+ * charts follow: a day with no row is a gap, not a zero, and a summary that quietly treats it as
+ * zero is the chart's lie restated as a number.
+ */
+function summarise(series) {
+  const rows = Array.isArray(series) ? series : [];
+  const observed = rows.filter(function (d) { return d.observed; });
+  const total = rows.reduce(function (a, d) { return a + d.gallons; }, 0);
+  const avg = observed.length
+    ? observed.reduce(function (a, d) { return a + d.gallons; }, 0) / observed.length : 0;
+  return {
+    total: total,
+    days: rows.length,
+    observed_days: observed.length,
+    missing_days: rows.length - observed.length,
+    complete: rows.length > 0 && observed.length === rows.length,
+    avg_day: avg,
+    // "Unusual" is relative to this window, not an absolute -- a house that uses 40 gal/day and one
+    // that uses 400 both deserve the same treatment.
+    high_threshold: avg * 1.5,
+  };
+}
+
 /** The 403 every caller sends when resolve_meter refuses. One sentence, one place. */
 function deny(res) {
   res.status(403).json({ ok: false, error: 'you do not have access to that meter' });
@@ -308,23 +336,22 @@ function mount(app) {
     };
 
     if (mode === 'long') {
+      // Same two kinds of range the History page offers. Having the calendar option on one page and
+      // not the other is the sort of inconsistency that reads as a bug in whichever one you found
+      // second.
+      const period = String(req.query.period || '').trim();
+      const calendar = period === 'this-month' || period === 'last-month';
+      const range = calendar ? time.month_range(new Date(), period === 'last-month' ? 1 : 0) : null;
       const days = Math.max(1, Math.min(Number(req.query.days) || 30, 400));
-      const series = await readings.daily_series_range(meter_id, days);
-      const observed = series.filter(function (d) { return d.observed; });
-      const avg = observed.length
-        ? observed.reduce(function (a, d) { return a + d.gallons; }, 0) / observed.length : 0;
+      const series = calendar
+        ? await readings.daily_series_between(meter_id, range.from, range.to)
+        : await readings.daily_series_range(meter_id, days);
       return res.json({
-        ok: true, mode, tz, days, live,
+        ok: true, mode, tz, days, live, range: range,
         meter_id: meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
         series,
-        summary: {
-          total: series.reduce(function (a, d) { return a + d.gallons; }, 0),
-          avg_day: avg,
-          // "Unusual" is relative to this window, not an absolute — a house that uses 40 gal/day and
-          // one that uses 400 both deserve the same treatment.
-          high_threshold: avg * 1.5,
-        },
-        sql: long_sql(meter_id, days),
+        summary: summarise(series),
+        sql: long_sql(meter_id, calendar ? series.length : days),
       });
     }
 
@@ -610,9 +637,25 @@ function mount(app) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg, req);
     if (!sel) return deny(res);
-    const series = await readings.daily_series(sel.meter_id, req.query.days || 30);
+    // Two kinds of range, deliberately distinguishable in the response.
+    //   ?days=N            rolling -- "how am I doing lately", always the same length
+    //   ?period=this-month calendar -- "what will the bill say", 28-31 days
+    // Mixing them silently would be the trap: last month is not 30 days, and this month is not a
+    // whole one. `range` carries the resolved bounds so the page can state them rather than imply.
+    const period = String(req.query.period || '').trim();
+    let series;
+    let range = null;
+    if (period === 'this-month' || period === 'last-month') {
+      range = time.month_range(new Date(), period === 'last-month' ? 1 : 0);
+      series = await readings.daily_series_between(sel.meter_id, range.from, range.to);
+    } else {
+      series = await readings.daily_series(sel.meter_id, req.query.days || 30);
+    }
     res.json({
-      ok: true, series: series, tz: time.zone(),
+      ok: true, series: series, tz: time.zone(), range: range,
+      // The number the calendar periods exist to produce. Without it the page answers "what will
+      // the bill say" with a picture of bar heights.
+      summary: summarise(series),
       meter_id: sel.meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
     });
   }));
@@ -679,8 +722,11 @@ function mount(app) {
 
   app.post('/api/water/settings', require_panel('water-settings'), guard(async function (req, res) {
     await schema.ensure_schema(db);
-    const values = await settings.set_many(req.body || {}, req.user);
-    res.json({ ok: true, settings: settings.describe(values) });
+    // `adjusted` rides along so the page can say which values it changed on the way in. A save
+    // that silently stores a different number than the one typed is indistinguishable from a save
+    // that did nothing -- both report success and show a value you did not choose.
+    const r = await settings.set_many(req.body || {}, req.user);
+    res.json({ ok: true, settings: settings.describe(r.values), adjusted: r.adjusted });
   }));
 
   app.post('/api/water/test-alert', require_panel('water-settings'), guard(async function (req, res) {

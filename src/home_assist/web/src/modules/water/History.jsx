@@ -12,10 +12,19 @@ import './water.css';
 // hovering 720 bars is the wrong answer.
 const HOUR_RANGES = [24, 48, 72, 168];
 const DAY_RANGES = [14, 30, 90];
+// Calendar periods, kept in their OWN group. A row reading "30d | Last month" invites the reading
+// that they are the same kind of thing; they are not. A rolling window is always the same length
+// and always comparable to itself. A calendar month is 28-31 days and is what the utility bills.
+const MONTH_RANGES = [
+  { key: 'this-month', label: 'This month' },
+  { key: 'last-month', label: 'Last month' },
+];
 
 export default function History() {
   const [hours, setHours] = useState(48);
   const [days, setDays] = useState(30);
+  // null = a rolling `days` window; otherwise the calendar period key.
+  const [period, setPeriod] = useState(null);
   const [hourly, setHourly] = useState(null);
   const [daily, setDaily] = useState(null);
   const [table, setTable] = useState(false);
@@ -29,8 +38,8 @@ export default function History() {
   }, [hours, sel]);
 
   useEffect(() => {
-    api.waterDaily(days, sel).then((r) => { if (r.status === 200 && r.body.ok) setDaily(r.body); });
-  }, [days, sel]);
+    api.waterDaily(days, sel, period).then((r) => { if (r.status === 200 && r.body.ok) setDaily(r.body); });
+  }, [days, sel, period]);
 
   const win = hourly ? hourly.overnight_window : [2, 5];
 
@@ -125,18 +134,70 @@ export default function History() {
               <button
                 key={d}
                 type="button"
-                className={'btn' + (d === days ? ' primary' : '')}
+                className={'btn' + (d === days && !period ? ' primary' : '')}
                 style={{ marginLeft: 6 }}
-                onClick={() => setDays(d)}
+                onClick={() => { setPeriod(null); setDays(d); }}
               >
                 {d}d
+              </button>
+            ))}
+            <span className="w-range-sep" aria-hidden="true" />
+            {MONTH_RANGES.map((mr) => (
+              <button
+                key={mr.key}
+                type="button"
+                className={'btn' + (period === mr.key ? ' primary' : '')}
+                style={{ marginLeft: 6 }}
+                onClick={() => setPeriod(mr.key)}
+              >
+                {mr.label}
               </button>
             ))}
           </span>
         </div>
         <p className="ha-card-sub">
           A slow leak is easiest to see here: the daily floor creeps up and never comes back down.
+          {/* The RESOLVED range, always spelled out. "Last month" is ambiguous on the 1st, and a
+              part-month set beside a whole one is the classic false comparison: 24 days of August
+              against all of July reads as a 23% drop that is nothing but the calendar. The Daily
+              average tile already excludes today for the same reason, one level down. */}
         </p>
+
+        {/* THE NUMBER, not just the shape. "Last month" exists to answer "what will the bill say",
+            and a chart of bar heights does not answer it.
+            The average is over the days that HAVE data, and the gap is named when there is one:
+            a month missing three days already has an understated total, and dividing it by the
+            calendar length would understate it twice. */}
+        {daily && daily.summary ? (
+          <p className="w-daily-total">
+            {daily.range ? <b>{daily.range.label}</b> : <b>Last {daily.summary.days} days</b>}
+            {daily.range ? (
+              <span className="muted">
+                {' '}({daily.range.from.slice(5)} – {daily.range.to.slice(5)}
+                {daily.range.partial ? ', so far' : ''})
+              </span>
+            ) : null}
+            {' — '}
+            <b>{Math.round(daily.summary.total).toLocaleString()}</b> gal
+            {daily.summary.observed_days
+              ? <> · <b>{Math.round(daily.summary.avg_day).toLocaleString()}</b> gal/day average</>
+              : null}
+            <span className="muted">
+              {' '}· {daily.summary.observed_days} of {daily.summary.days} days recorded
+            </span>
+            {daily.range && daily.range.partial
+              ? <span className="w-partial"> Part month — not comparable to a full one.</span>
+              : null}
+            {!daily.summary.complete && daily.summary.observed_days ? (
+              <span className="w-partial">
+                {' '}{daily.summary.missing_days} day{daily.summary.missing_days === 1 ? '' : 's'} missing —
+                the total is lower than what was actually used.
+              </span>
+            ) : null}
+            <span className="muted"> · times are {(daily.tz || '').split('/')[1]
+              ? (daily.tz || '').split('/')[1].replace('_', ' ') : daily.tz} time</span>
+          </p>
+        ) : null}
         <BarChart
           data={dayBars}
           height={190}

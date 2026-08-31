@@ -121,8 +121,59 @@ function recent_hour_keys(date, count, tz) {
   return out;
 }
 
+/**
+ * A CALENDAR month as day keys — a different question from "the last 30 days", and worth keeping
+ * separate from it.
+ *
+ *   rolling   "how am I doing lately"   always the same length, always comparable to itself
+ *   calendar  "what will the bill say"  28-31 days, and it is what the utility measures
+ *
+ * `back` is 0 for the current month, 1 for the previous one.
+ *
+ * Derived from parts() in the CONFIGURED zone, never from the process's. A month boundary computed
+ * in UTC would file late-evening usage on the 31st into the following month -- the same class of
+ * silent drift the hour buckets already guard against.
+ *
+ * Returns { from, to, label, partial, days }. `partial` is the whole point of the current month
+ * being here at all: 24 days of August set beside all of July reads as a 23% drop that is nothing
+ * but the calendar.
+ */
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+function days_in_month(year, month1) {         // month1 is 1-12
+  if (month1 === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month1 - 1];
+}
+
+function month_range(date, back, tz) {
+  const p = parts(date || new Date(), tz);
+  let y = Number(p.year);
+  let m = Number(p.month);                     // 1-12
+  const today = Number(p.day);
+  const n = Math.max(0, Math.floor(Number(back) || 0));
+  for (let i = 0; i < n; i++) { m -= 1; if (m < 1) { m = 12; y -= 1; } }
+
+  const last = days_in_month(y, m);
+  const current = n === 0;
+  // The current month stops at TODAY, not at the 31st: the days after today have not happened, and
+  // drawing them as zero would say this house used no water tomorrow.
+  const lastDay = current ? today : last;
+  const stamp = y + '-' + pad(m) + '-';
+  return {
+    from: stamp + '01',
+    to: stamp + pad(lastDay),
+    label: MONTH_NAMES[m - 1] + ' ' + y,
+    partial: current && today < last,
+    days: lastDay,
+  };
+}
+
 module.exports = {
   DEFAULT_TZ, zone, parts, hour_key, day_key, local_hour,
   hour_key_offset, day_key_offset, sql_utc, sql_local, stamps,
-  hour_start_sql, recent_hour_keys,
+  hour_start_sql, recent_hour_keys, month_range, days_in_month,
 };

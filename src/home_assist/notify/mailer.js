@@ -188,6 +188,9 @@ function close() {
  * send_job_status_email.js layout so these look like the rest of your job mail.
  */
 function html_alert(opts) {
+  const checklist = (opts.checklist || []).map(function (c) {
+    return '<li style="margin-bottom:5px;">' + esc(c) + '</li>';
+  }).join('');
   const rows = (opts.rows || []).map(function (r) {
     return '<tr><td style="padding:6px 12px 6px 0;white-space:nowrap;"><strong>' + esc(r[0]) +
       '</strong></td><td style="padding:6px 0;">' + esc(r[1]) + '</td></tr>';
@@ -201,6 +204,17 @@ function html_alert(opts) {
       '</div>' +
       (opts.body ? '<p style="font-size:15px;line-height:1.5;margin:0 0 16px 0;">' + esc(opts.body) + '</p>' : '') +
       (rows ? '<table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:14px;">' + rows + '</table>' : '') +
+      // WHAT TO CHECK. Only the receiver-silent alert ever told anyone what to do about it; every
+      // other one stated a fact and stopped. Someone who is told water ran overnight and not that a
+      // toilet flapper is the overwhelmingly likely cause has been informed, not helped.
+      (checklist
+        ? '<p style="font-size:14px;font-weight:bold;margin:0 0 6px 0;">' + esc(opts.checklist_title || 'What to check') + '</p>' +
+          '<ul style="font-size:14px;line-height:1.5;margin:0 0 16px 0;padding-left:20px;">' + checklist + '</ul>'
+        : '') +
+      (opts.link && opts.link.href
+        ? '<p style="margin:0 0 16px 0;"><a href="' + esc(opts.link.href) + '" ' +
+          'style="font-size:14px;color:#0d6efd;">' + esc(opts.link.label || 'Open') + '</a></p>'
+        : '') +
       (opts.footer ? '<p style="color:#6c757d;font-size:12px;margin-top:20px;">' + esc(opts.footer) + '</p>' : '') +
     '</div>';
 }
