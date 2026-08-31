@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { num } from '../../lib/num.js';
 import BarChart from './BarChart.jsx';
 import MeterPicker from './MeterPicker.jsx';
 import { useMeterSel } from './meterSel.js';
@@ -102,7 +103,7 @@ export default function History() {
                 {[...hourBars].reverse().map((d) => (
                   <tr key={d.key}>
                     <td>{d.key.replace('T', '  ')}:00</td>
-                    <td className="num">{d.observed ? d.value.toFixed(0) : '—'}</td>
+                    <td className="num">{d.observed ? num(d.value, 0) : '—'}</td>
                     <td className="num">{d.observed ? '' : 'no data'}</td>
                     <td>{d.highlight ? 'yes' : ''}</td>
                   </tr>
@@ -115,7 +116,7 @@ export default function History() {
             <BarChart
               data={hourBars}
               height={210}
-              formatTip={(d) => (d.observed ? `${d.key.replace('T', ' ')}:00 — ${d.value.toFixed(0)} gal` : `${d.key.replace('T', ' ')}:00 — no data`)}
+              formatTip={(d) => (d.observed ? `${d.key.replace('T', ' ')}:00 — ${num(d.value, 0)} gal` : `${d.key.replace('T', ' ')}:00 — no data`)}
             />
             <div className="w-legend-note">
               <span><span className="w-swatch series" />Gallons used</span>
@@ -201,7 +202,7 @@ export default function History() {
         <BarChart
           data={dayBars}
           height={190}
-          formatTip={(d) => (d.observed ? `${d.key} — ${d.value.toFixed(0)} gal` : `${d.key} — no data`)}
+          formatTip={(d) => (d.observed ? `${d.key} — ${num(d.value, 0)} gal` : `${d.key} — no data`)}
         />
       </div>
     </div>

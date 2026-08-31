@@ -157,6 +157,22 @@ function check_watchdog(last_read_at, now, cfg, started_at) {
  * The daily "still alive" total. Not a leak signal — it is the proof-of-life that tells you the
  * whole chain still works on a day when nothing is wrong.
  */
+/**
+ * How far back the daily summary compares against, and therefore how many hours of buckets the
+ * caller has to load.
+ *
+ * Stated as a constant because it is a CONTRACT with the collector, not a local choice. The loop
+ * below asked for days 2..8 while run.js was handing it hour_map(meter_id, 72) -- three days. Days
+ * with no buckets are excluded from the average by design, so this did not error or warn: it
+ * quietly averaged over the two days it could see and labelled the result with however many that
+ * was. The email then reports "your 2-day average" in a sentence built to say seven, and two days
+ * is not a baseline -- one heavy laundry day moves it by half.
+ *
+ * HOURS_NEEDED is what run.js loads. Change the comparison window here and the collector follows.
+ */
+const SUMMARY_COMPARE_DAYS = 7;
+const SUMMARY_HOURS_NEEDED = (SUMMARY_COMPARE_DAYS + 2) * 24;   // +1 for yesterday, +1 for today
+
 function daily_summary(hours, now, cfg, tz) {
   if (cfg.daily_summary_hour === null || cfg.daily_summary_hour < 0) return null;
   if (time.local_hour(now, tz) !== cfg.daily_summary_hour) return null;
@@ -178,7 +194,7 @@ function daily_summary(hours, now, cfg, tz) {
   // means something. Days with no buckets at all are excluded -- an unrecorded day averaged in as
   // zero would drag the baseline down and make every ordinary day look excessive.
   const prior = [];
-  for (let d = 2; d <= 8; d++) {
+  for (let d = 2; d <= SUMMARY_COMPARE_DAYS + 1; d++) {
     const day_keys = [];
     for (let h = 0; h < 24; h++) {
       day_keys.push(time.day_key_offset(now, d, tz) + 'T' + String(h).padStart(2, '0'));
@@ -555,6 +571,137 @@ const ALERT_CATALOG = [
   }
 ];
 
+/**
+ * The STABLE name of an alert, as opposed to the name of one firing of it.
+ *
+ * A fired alert's `key` is deliberately unique per occurrence -- 'overnight:2026-08-31',
+ * 'run:2026-08-31 05:04:00' -- because that is what makes the cooldown one-leak-one-email rather
+ * than one-email-ever. Anything that has to remember a PREFERENCE about an alert ("this meter does
+ * not want the daily summary") needs the opposite: a name that is the same every time.
+ *
+ * That name is the catalog's, so a stored preference and the Reference page cannot drift apart.
+ */
+function catalog_key(alert) {
+  if (!alert) return '';
+  // The one alert whose catalog row is keyed by `key` rather than `kind`: 'never_decoded' and
+  // 'stale' are both kind 'stale' and are deliberately separate entries, because "it broke" and
+  // "it never worked" are different problems with different fixes.
+  if (alert.key === 'never_decoded') return 'never_decoded';
+  return String(alert.kind || alert.key || '');
+}
+
+/**
+ * The alerts that cannot be switched off, whatever is stored against a meter.
+ *
+ * Both watchdogs. A receiver that has stopped decoding produces a flat zero, which is
+ * indistinguishable from a quiet night -- so silencing the watchdog does not make the monitor
+ * quieter, it makes it dishonest. Enforced here rather than in the UI: a checkbox that is merely
+ * absent from a page is not a rule, and this is the one alert whose absence is unfalsifiable from
+ * the outside.
+ */
+const ALWAYS_ON = ['stale', 'never_decoded'];
+function is_suppressible(key) { return ALWAYS_ON.indexOf(String(key)) < 0; }
+
+/**
+ * sample_alerts — one representative firing of every alert in the catalog, at THIS meter's settings.
+ *
+ * What the Meters page shows under each alert. The whole point is that it is not a mock-up: these
+ * come back out of check_overnight(), check_continuous(), check_run_alarm() and the rest — the same
+ * functions the collector calls — and are then handed to the same build_email() that sends. A
+ * preview assembled from hand-written prose would drift from the mail within one release, and a
+ * page that can disagree with the message it is describing is worse than no page, because it is
+ * believed.
+ *
+ * Two things are synthesised, and only two:
+ *
+ *   THE INCIDENT. There is no leak in progress while you are reading a settings page, so the input
+ *   is built to sit just past this meter's OWN thresholds — an overnight total a little over
+ *   overnight_threshold_gal, a run a little past run_alarm_min. That makes the preview answer the
+ *   question actually being asked: "what would I be sent, at the numbers I have set?" Change a
+ *   threshold and the preview moves with it.
+ *
+ *   THE CLOCK. Several rules are gated on the hour: check_overnight() stays silent until the window
+ *   has passed and daily_summary() fires only in its configured hour. A preview at 3pm would be
+ *   null for both. Each sample therefore picks a `now` inside its own rule's window.
+ *
+ * The ENABLE gates (run_alert_email, run_alert_all_clear) are forced on for the sample. Whether an
+ * alert is switched on is shown by the row itself; the preview answers what it says when it fires,
+ * and a blank panel for a switched-off alert would hide exactly what you need to decide whether to
+ * switch it on.
+ */
+function sample_alerts(cfg, tz, now) {
+  const at = now instanceof Date ? now : new Date();
+  const C = Object.assign({}, cfg, { run_alert_email: 1, run_alert_all_clear: 1 });
+  const out = {};
+  const keep = (k, a) => { if (a) out[k] = a; };
+
+  // ── overnight: a window that has just ended, carrying a little over the threshold ──
+  const on_end = Number(C.overnight_end_hour) || 5;
+  const on_at = at_local_hour(at, on_end, tz);
+  const on_keys = overnight_keys(on_at, C, tz);
+  const on_total = round1((Number(C.overnight_threshold_gal) || 3) * 4 + 0.5);
+  const on_hours = {};
+  on_keys.forEach(function (k, i) { on_hours[k] = i === 0 ? on_total : 0; });
+  keep('overnight', check_overnight(on_hours, on_at, C, tz));
+
+  // ── continuous: every hour of the streak just above the per-hour floor ──
+  const co_hours = {};
+  const co_rate = round1((Number(C.continuous_min_gal_per_hour) || 1) * 2);
+  for (let i = 1; i <= (Number(C.continuous_hours) || 6); i++) co_hours[time.hour_key_offset(at, i, tz)] = co_rate;
+  keep('continuous', check_continuous(co_hours, at, C, tz));
+
+  // ── the run alarm, and the all-clear that follows it ──
+  const run_min = Math.max(1, Number(C.run_alarm_min) || 60);
+  const run_gal = round1(run_min * 0.78);          // ~0.8 gal/min: a hose, not a burst main
+  const run = {
+    flowing: true, minutes: run_min, gallons: run_gal, rate: round1(run_gal / run_min),
+    started_at: time.sql_local(new Date(at.getTime() - run_min * 60000), tz), truncated: false, level: 'alarm',
+  };
+  const alarm = check_run_alarm(run, C);
+  keep('run', alarm);
+  if (alarm) {
+    keep('run_cleared', check_run_cleared({ flowing: false }, C, {
+      key: alarm.key, minutes: run_min, gallons: run_gal, started_at: run.started_at,
+    }));
+  }
+
+  // ── the daily summary, in its own hour ──
+  const ds_hour = Number(C.daily_summary_hour);
+  if (Number.isFinite(ds_hour) && ds_hour >= 0) {
+    const ds_at = at_local_hour(at, ds_hour, tz);
+    const ds_hours = {};
+    // A day with a plausible shape rather than a flat line: the summary reports an overnight slice
+    // and a 7-day average, and both read as broken when every hour is identical.
+    for (let i = 1; i <= 24 * 8; i++) {
+      const k = time.hour_key_offset(ds_at, i, tz);
+      const h = Number(k.slice(-2));
+      ds_hours[k] = h >= 7 && h <= 22 ? 9 : 0.5;
+    }
+    keep('summary', daily_summary(ds_hours, ds_at, C, tz));
+  }
+
+  // ── the two watchdogs ──
+  const quiet = Math.max(1, Number(C.stale_minutes) || 90);
+  const silent_since = new Date(at.getTime() - (quiet + 5) * 60000);
+  keep('stale', check_watchdog(silent_since, at, C, silent_since));
+  // never_decoded is the same function with NO last reading — a collector that has been up past the
+  // stale window and has never heard the meter at all.
+  keep('never_decoded', check_watchdog(null, at, C, silent_since));
+
+  return out;
+}
+
+// Shift a moment to a given LOCAL hour, by asking time.js what the local hour currently is and
+// moving by the difference. Never setHours(), which reads the PROCESS's timezone -- the exact class
+// of drift time.js exists to prevent, and one that would pick the wrong overnight window on the
+// Ubuntu box while looking perfectly correct on the Windows laptop.
+function at_local_hour(date, hour, tz) {
+  const h = Math.max(0, Math.min(23, Number(hour) || 0));
+  return new Date(date.getTime() + (h - time.local_hour(date, tz)) * 3600000);
+}
+
+function round1(n) { return Math.round(Number(n) * 10) / 10; }
+
 
 /**
  * run_spans — every continuous run inside a window, not just the one happening now.
@@ -741,5 +888,6 @@ module.exports = {
   check_run_alarm, check_run_cleared,
   sum_hours, overnight_keys,
   check_overnight, check_continuous, check_watchdog, daily_summary, current_run, run_spans,
-  evaluate, status, ALERT_CATALOG,
+  evaluate, status, ALERT_CATALOG, catalog_key, is_suppressible, ALWAYS_ON, sample_alerts,
+  SUMMARY_COMPARE_DAYS, SUMMARY_HOURS_NEEDED,
 };

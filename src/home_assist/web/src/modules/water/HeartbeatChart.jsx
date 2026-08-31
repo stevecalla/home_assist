@@ -1,4 +1,5 @@
 import { useState, useRef, useLayoutEffect } from 'react';
+import { num } from '../../lib/num.js';
 
 // Measured pixels, never a stretched viewBox — same rule as the other charts. A fixed viewBox with
 // preserveAspectRatio="none" squashes the axis text on a phone, which is where this gets read.
@@ -207,7 +208,7 @@ export default function HeartbeatChart({
   const lastOdo = last.odo;
 
   const ticks = [0, usedMax / 2, usedMax];
-  const fmtUsed = (v) => (usedMax < 4 ? v.toFixed(1) : Math.round(v).toString());
+  const fmtUsed = (v) => (usedMax < 4 ? num(v, 1) : num(Math.round(v), 0));
 
   // Overnight bands: one per local night inside the window.
   // Overnight bands, placed by the METER's hour-of-day.

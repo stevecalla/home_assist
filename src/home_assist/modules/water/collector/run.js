@@ -396,7 +396,10 @@ async function create_collector(options) {
     for (const m of reg) {
       const pid = Number(m.meter_id);
       try {
-        const hours = await readings.hour_map(pid, 72);
+        // Wide enough for the daily summary's comparison window, not just the hourly rules.
+        // 72 was sized for check_continuous (<= 24h) and check_overnight (today), and the summary
+        // was silently starved by it -- see rules.SUMMARY_HOURS_NEEDED. ~216 rows per meter.
+        const hours = await readings.hour_map(pid, rules.SUMMARY_HOURS_NEEDED);
         const recent = await readings.recent_readings(pid, 500);
         const current = rules.current_run(recent, now, cfg);
         const fired = rules.evaluate({
@@ -415,6 +418,9 @@ async function create_collector(options) {
             // For a neighbour an id identifies nothing; for you with four meters it is a lookup.
             meter_name: m.meter_name || '',
             notify: !!m.notify,
+            // Per-alert switches for THIS meter. `notify` is all-or-nothing for the meter; this is
+            // the finer grain — the neighbour who wants overnight flow but not the daily summary.
+            alerts_off: m.alerts_off || [],
             email_to: meters.recipients_for(m, cfg.alert_email_to),
             last_gallons: (other_last.get(pid) || {}).gallons ?? null,
             // Month context on every alert. Resolved HERE rather than in alerts.js so that module
@@ -455,7 +461,9 @@ async function create_collector(options) {
         owned_meter_row = reg.find(function (m) { return Number(m.meter_id) === Number(meter_id); }) || null;
       } catch (e) { /* keep the previous map */ }
       const now = new Date();
-      const hours = await readings.hour_map(meter_id, 72);
+      // See rules.SUMMARY_HOURS_NEEDED: the daily summary compares yesterday against the previous
+      // seven FULL days, so it needs nine days of buckets to do what its own sentence claims.
+      const hours = await readings.hour_map(meter_id, rules.SUMMARY_HOURS_NEEDED);
 
       // Heartbeat every tick, even with no packets — this is what makes "receiver silent" visible
       // in the UI rather than looking like a quiet night.
@@ -474,6 +482,9 @@ async function create_collector(options) {
         // Your own meter can have a dedicated address list too -- useful when the house alerts go
         // to two people but a second property should not.
         email_to: meters.recipients_for(owned_meter_row, cfg.alert_email_to),
+        // Your own meter's per-alert switches. The watchdog is not among them at any price --
+        // alerts.dispatch refuses to suppress `stale` however this list is built.
+        alerts_off: (owned_meter_row && owned_meter_row.alerts_off) || [],
         last_gallons: last ? last.gallons : null,
         today_gallons: rules.sum_hours(hours, today_keys).total,
       };

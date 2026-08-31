@@ -338,6 +338,16 @@ const ADDED_COLUMNS = [
   ['water_alerts', 'meter_id', 'BIGINT UNSIGNED NOT NULL DEFAULT 0'],
   ['water_meters', 'notify', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = alerts for this meter are DELIVERED, not just recorded'"],
   ['water_meters', 'notify_email', 'VARCHAR(500) NULL'],
+  // Which of this meter's alerts do NOT email. A comma-separated list of catalog keys, empty by
+  // default, so every existing row keeps sending exactly what it sent before this column existed.
+  //
+  // A column rather than a water_meter_alerts table on purpose: the whole vocabulary is seven fixed
+  // keys defined in leak_rules.ALERT_CATALOG, it is read once per alert alongside the meter row
+  // that is already being fetched, and a join table would add a query to the collector's tick path
+  // to store at most seven short strings. Stored as "off" rather than "on" so a NEW alert kind
+  // starts switched ON for everyone -- the safe default for a leak monitor is that a rule someone
+  // has never seen still reaches them.
+  ['water_meters', 'alerts_off', "VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'catalog keys whose EMAIL is suppressed for this meter; the rules still run and still record'"],
   ['water_meters', 'purpose', purpose_def(SHORT.water_meters, 'meter_id')],
   ['water_meters', 'created_at_mtn', 'DATETIME NULL'],
   ['water_meters', 'created_at_utc', 'DATETIME NULL'],

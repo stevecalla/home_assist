@@ -18,10 +18,15 @@ const MONTHS = {
   this_month: { label: 'August 2026', gallons: 2480, days: 31, observed_days: 20, complete: false, partial: true },
   last_month: { label: 'July 2026', gallons: 3180, days: 31, observed_days: 31, complete: true, partial: false },
 };
+// The field names are check_overnight()'s, verbatim: { total, threshold, hours_missing, ... }.
+// They used to be total_gal / threshold_gal / start_hour / end_hour -- names invented here to match
+// names invented in build_email, so the suite and the code agreed with each other and neither
+// agreed with the rules. Every assertion below passed while the real overnight email was going out
+// with no figures in it at all. See meter_alerts.test.js, which now builds these from the rules.
 const overnight = {
   kind: 'overnight',
   message: 'Water ran overnight: 12 gal between 2:00 and 5:00',
-  detail: { total_gal: 12, threshold_gal: 3, start_hour: 2, end_hour: 5 },
+  detail: { day: '2026-08-30', total: 12, threshold: 3, hours_missing: 0 },
 };
 
 test('the subject leads with the FACT and the meter name, not a timestamp', function () {
@@ -57,9 +62,9 @@ test('detail rows are labelled for a human, not dumped from the object', functio
   const e = alerts.build_email(overnight, CFG, { meter_id: 16642655 });
   assert.match(e.text, /Used overnight: 12 gal/);
   assert.match(e.text, /Alerts above: 3 gal/);
-  assert.match(e.text, /Overnight window: 2:00 to 5:00/);
+  assert.match(e.text, /Overnight window: 2:00 to 5:00/);   // from cfg, not the detail
   assert.ok(e.text.indexOf('total gal') === -1, 'no raw key names');
-  assert.ok(e.text.indexOf('threshold gal') === -1);
+  assert.ok(e.text.indexOf('hours missing') === -1);
 });
 
 test('every email carries this month and last month', function () {
@@ -114,7 +119,10 @@ test('the summary states the months as a sentence, and not twice', function () {
     CFG, { meter_id: 16642655, months: MONTHS });
   assert.match(e.text, /August 2026: 2,480 gal so far \(20 days\)\. July 2026 finished at 3,180 gal\./);
   assert.ok(!/so far.*so far/.test(e.text), 'the qualifier must not be doubled');
-  assert.strictEqual((e.text.match(/July 2026/g) || []).length, 1, 'stated once, not as a row as well');
+  // The sentence AND the rows: the sentence gives the judgement, the rows sit with the other
+  // figures. This used to assert exactly one occurrence.
+  assert.strictEqual((e.text.match(/July 2026/g) || []).length, 2, 'sentence and row');
+  assert.match(e.text, /^August 2026: 2,480 gal so far \(20 days\)$/m, 'and as a row of its own');
 });
 
 test('the summary subject carries yesterday AND the month so far', function () {

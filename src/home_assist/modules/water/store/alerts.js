@@ -18,6 +18,9 @@ const db = require('../../../store/db');
 const time = require('../../../time');
 const mailer = require('../../../notify/mailer');
 const ntfy = require('../../../notify/ntfy');
+// The rules module is PURE -- no db, no clock, no network -- so requiring it here costs nothing and
+// cannot cycle back. catalog_key() and is_suppressible() live next to the catalog they describe.
+const { catalog_key, is_suppressible } = require('../rules/leak_rules');
 
 // Banner colors, matching the send_job_status_email.js palette.
 const COLORS = {
@@ -26,6 +29,11 @@ const COLORS = {
   stale: '#dc3545',       // red — we are blind, which is worse than a leak
   summary: '#0d6efd',     // blue — informational
   test: '#28a745',        // green
+  // Both of these were missing and fell through to the grey default. The run alarm is the FASTEST
+  // and most urgent thing this app says -- it answers in minutes where the hourly rules need six
+  // hours -- and it was arriving with a calmer banner than the overnight advisory.
+  run: '#dc3545',         // red — something is running right now and has not stopped
+  run_cleared: '#28a745', // green — it stopped; the only good-news banner here
 };
 
 /**
@@ -41,7 +49,11 @@ const COLORS = {
  */
 const SUBJECT_FACT = {
   overnight: function (a) {
-    const g = a.detail && a.detail.total_gal;
+    // `total` is what check_overnight() emits; `total_gal` was the name this file guessed. Reading
+    // only the guess meant the most important subject line in the app shipped without its number:
+    // "[WATER] Water ran overnight — 4528 Sprucedale" says nothing you did not already fear.
+    const d = a.detail || {};
+    const g = d.total !== undefined && d.total !== null ? d.total : d.total_gal;
     return g === undefined || g === null ? 'Water ran overnight' : Math.round(g) + ' gal overnight';
   },
   continuous: function (a) {
@@ -52,7 +64,12 @@ const SUBJECT_FACT = {
     const m = a.detail && a.detail.minutes;
     return m ? 'Running ' + fmt_dur(m) + ' without stopping' : 'Running a long time';
   },
-  run_clear: function (a) {
+  // `run_cleared`, with the D. The rules emit `kind: 'run_cleared'` (leak_rules.check_run_cleared),
+  // and this map was keyed on 'run_clear' -- so the all-clear matched NOTHING here and fell through
+  // to the generic '[WATER] Alert' subject, while its detail rows fell through to the raw
+  // Object.keys() dump the rest of this file exists to have replaced. Silent, because a key that is
+  // absent from a lookup table looks exactly like a kind that was never meant to have one.
+  run_cleared: function (a) {
     const m = a.detail && a.detail.minutes;
     return m ? 'Stopped after ' + fmt_dur(m) : 'The run has stopped';
   },
@@ -192,20 +209,49 @@ function build_email(alert, cfg, ctx) {
     if (v === null || v === undefined || typeof v === 'object') return;
     detail_rows.push([label, String(v) + (suffix || '')]);
   };
-  if (alert.kind === 'overnight') {
-    add('Used overnight', D.total_gal === undefined ? undefined : Number(D.total_gal).toFixed(0), ' gal');
-    add('Alerts above', D.threshold_gal, ' gal');
-    if (D.start_hour !== undefined && D.end_hour !== undefined) {
-      add('Overnight window', D.start_hour + ':00 to ' + D.end_hour + ':00');
+  // ── the field names below are the RULES', verbatim ────────────────────────────────────────────
+  //
+  // They were not. This branch was written against `total_gal`, `threshold_gal`, `start_hour`,
+  // `end_hour`, `min_gal_per_hour` and `minutes` -- plausible names, and mostly not the ones
+  // leak_rules actually emits. check_overnight() returns { total, threshold, ... }, check_continuous
+  // returns { total, hours, min_per_hour }, check_watchdog returns { quiet_minutes }. Because add()
+  // skips undefined, the result was not an error anywhere: the overnight email simply arrived with
+  // NO figures at all, and its subject fell back to "Water ran overnight" with the gallons missing
+  // -- on the alert this whole app exists to tune.
+  //
+  // It survived because the tests supplied their own fixtures using the invented names, so the
+  // suite and the code agreed with each other and neither agreed with the rules. The `_gal` aliases
+  // are kept as fallbacks: rows already in water_alerts were written by the rules, but the daily
+  // summary genuinely does use total_gal, and a formatter that reads both cannot be wrong.
+  const pick = function () {
+    for (let i = 0; i < arguments.length; i++) {
+      if (arguments[i] !== undefined && arguments[i] !== null) return arguments[i];
     }
+    return undefined;
+  };
+  const round0 = function (v) { return v === undefined ? undefined : Number(v).toFixed(0); };
+
+  if (alert.kind === 'overnight') {
+    add('Used overnight', round0(pick(D.total, D.total_gal)), ' gal');
+    add('Alerts above', pick(D.threshold, D.threshold_gal), ' gal');
+    // The window is not in the detail at all — it is configuration, and it is what makes the
+    // number mean something. Read from cfg rather than dropped.
+    if (cfg && cfg.overnight_start_hour !== undefined && cfg.overnight_end_hour !== undefined) {
+      add('Overnight window', cfg.overnight_start_hour + ':00 to ' + cfg.overnight_end_hour + ':00');
+    }
+    if (D.hours_missing) add('Hours with no reading', D.hours_missing);
   } else if (alert.kind === 'continuous') {
     add('Hours in a row with water', D.hours);
-    add('Counts as flow above', D.min_gal_per_hour, ' gal/hour');
-  } else if (alert.kind === 'run' || alert.kind === 'run_clear') {
-    if (D.minutes !== undefined) add('Ran for', fmt_dur(D.minutes));
-    add('Volume', D.gallons === undefined ? undefined : Number(D.gallons).toFixed(0), ' gal');
+    add('Used over those hours', round0(pick(D.total, D.total_gal)), ' gal');
+    add('Counts as flow above', pick(D.min_per_hour, D.min_gal_per_hour), ' gal/hour');
+  } else if (alert.kind === 'run' || alert.kind === 'run_cleared') {
+    const mins = pick(D.minutes, D.quiet_minutes);
+    if (mins !== undefined) add('Ran for', fmt_dur(mins));
+    add('Volume', round0(pick(D.gallons, D.total_gal)), ' gal');
   } else if (alert.kind === 'stale') {
-    if (D.minutes !== undefined) add('Silent for', fmt_dur(D.minutes));
+    const mins = pick(D.quiet_minutes, D.minutes);
+    if (mins !== undefined) add('Silent for', fmt_dur(mins));
+    add('Alerts after', pick(D.stale_minutes, cfg && cfg.stale_minutes), ' minutes of silence');
   } else if (alert.kind === 'summary') {
     add('Yesterday', D.total_gal === undefined ? undefined : Number(D.total_gal).toFixed(0), ' gal');
     add('Of that, overnight', D.overnight_gal === undefined ? undefined : Number(D.overnight_gal).toFixed(0), ' gal');
@@ -234,9 +280,10 @@ function build_email(alert, cfg, ctx) {
     else if (!m.complete) v += ' — ' + (m.days - m.observed_days) + ' day(s) not recorded';
     return v;
   };
-  // On the summary the months are stated as a sentence below the headline (see `body`), so they are
-  // NOT repeated as rows -- the same two numbers twice on one screen is noise, not emphasis.
-  if (M && alert.kind !== 'summary') {
+  // Every email, summary included. The summary also states them as a sentence below the headline,
+  // so they appear twice there: the sentence gives the judgement, the rows put the figures with the
+  // other figures, which is where people look for them.
+  if (M) {
     ['this_month', 'last_month'].forEach(function (slot) {
       const m = M[slot];
       if (m) rows.push([m.label, month_value(m)]);
@@ -316,6 +363,25 @@ async function dispatch(alert, cfg, ctx) {
     // completely different things.
     await record(alert, false, 'not delivered — notify is off for meter ' + meter_id, meter_id);
     return { sent: true, delivered: false, channels: {}, note: 'recorded only (notify off)' };
+  }
+
+  // ── this meter has this ONE alert switched off ────────────────────────────────────────────────
+  //
+  // Per meter, not per module: the neighbour who wants the overnight alert and not the daily
+  // summary should not have to change what YOUR meter sends. `ctx.alerts_off` is the resolved list
+  // from water_meters.alerts_off; the caller reads the registry, this module never does.
+  //
+  // Recorded exactly like the notify-off case above, and for the same reason: the rule still ran
+  // and still found what it found. Switching off an EMAIL must not make the history lie about what
+  // the monitor saw -- that is the difference between a quiet alert and a blind one.
+  //
+  // is_suppressible() refuses `stale` no matter what is stored, so the watchdog cannot be silenced
+  // through this path even by a hand-edited row.
+  const off = (ctx && ctx.alerts_off) || [];
+  const ckey = catalog_key(alert);
+  if (is_suppressible(ckey) && off.indexOf(ckey) >= 0) {
+    await record(alert, false, 'not delivered — "' + ckey + '" is switched off for meter ' + meter_id, meter_id);
+    return { sent: true, delivered: false, channels: {}, note: 'recorded only (' + ckey + ' off)' };
   }
 
   const channels = {};

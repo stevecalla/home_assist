@@ -14,6 +14,234 @@ import './water.css';
 // can be switched on at all — otherwise its alerts would fall through to the global list and start
 // arriving in your inbox at 3am, which nobody would guess had been configured.
 
+// ── one alert, as a disclosure ──────────────────────────────────────────────────────────────────
+//
+// COLLAPSED it answers "what is this and is it on". EXPANDED it answers "and what exactly will it
+// send me", with the message itself rather than a description of it.
+//
+// A checkbox per alert was the obvious design and the wrong one. "Daily summary ☑" asks you to
+// decide about something you have never read; a row you can open and read first is the difference
+// between configuring and guessing. That the answer is the REAL email — built by the same
+// build_email() the collector calls, at this meter's real settings and this month's real totals —
+// is the whole point. A written-out sample would drift from the mail within a release and be
+// believed anyway.
+//
+// Closed by default, all of them. Six alerts opened at once is a wall of text on the page you go to
+// when you want to rename a meter.
+function AlertRow({ a, meterId, canSend, onToggle, busy }) {
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  async function sendOne() {
+    setSending(true); setMsg(null);
+    const r = await api.waterSendMeterAlert(meterId, a.key);
+    setSending(false);
+    if (r.status !== 200 || !r.body.ok) { setMsg({ ok: false, text: r.body.error || 'Request failed' }); return; }
+    const b = r.body;
+    if (!b.sent) { setMsg({ ok: false, text: b.error || 'Not sent' }); return; }
+    setMsg({
+      ok: !b.rejected.length,
+      text: b.rejected.length
+        ? 'Sent — REJECTED: ' + b.rejected.join(', ')
+        : 'Sent to ' + (b.accepted.join(', ') || b.to),
+    });
+  }
+
+  const label = { on: 'On', off: 'Off', always: 'Always' }[a.state];
+
+  return (
+    <details className="w-alert-row">
+      <summary>
+        <span className="w-alert-caret" aria-hidden="true">▸</span>
+        <span className="w-alert-name">{a.label}</span>
+        <span className={'w-alert-state ' + a.state}>{label}</span>
+        <span className="w-alert-freq">{frequency(a)}</span>
+      </summary>
+
+      <div className="w-alert-body">
+        <dl className="w-alert-facts">
+          <dt>When</dt>
+          <dd>
+            {a.when}
+            {/* THE NUMBERS, not the setting names. The catalog's `when` is written for the
+                Reference page and says things like "No meter reading for stale_minutes" — true,
+                and useless for deciding whether the value is right, because the value is the one
+                thing it does not contain. Each setting is printed with what it is set to AND what
+                it ships as, since "60 minutes" cannot tell you whether anyone ever tuned it. */}
+            {a.settings.length ? (
+              <ul className="w-alert-sets">
+                {a.settings.map((s) => (
+                  <li key={s.name} title={s.help || undefined}>
+                    {s.label}: <b>{fmtSetting(s)}</b>
+                    {String(s.value) === String(s.default)
+                      ? <span className="muted"> (the default)</span>
+                      : <span className="muted"> (default {fmtSetting(s, s.default)})</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </dd>
+
+          <dt>Goes to</dt>
+          <dd>{canSend ? <b>{a.to}</b> : <span className="muted">nobody — see above</span>}</dd>
+
+          <dt>How often</dt>
+          <dd>{frequencyLong(a)}</dd>
+        </dl>
+
+        {a.state === 'always' ? (
+          <p className="w-alert-note">
+            <b>No switch, deliberately.</b> {a.why}
+          </p>
+        ) : null}
+
+        {a.preview ? (
+          <>
+            <div className="w-preview-label">
+              What it sends — built by the code that sends it, at this meter’s settings
+            </div>
+            <div className="w-preview">
+              <span className="sub">{a.preview.subject}</span>
+              {a.preview.text}
+            </div>
+          </>
+        ) : (
+          <p className="w-alert-note">
+            No preview: this alert cannot be built at the current settings. That usually means the
+            rule is switched off in Settings rather than here.
+          </p>
+        )}
+
+        <div className="w-alert-actions">
+          {a.state === 'always' ? (
+            <button className="btn" disabled title="The watchdog cannot be switched off">Always on</button>
+          ) : (
+            <button className={'btn' + (a.state === 'off' ? ' primary' : '')}
+                    onClick={() => onToggle(a.key, a.state === 'on')} disabled={busy}>
+              {a.state === 'on' ? 'Turn off' : 'Turn on'}
+            </button>
+          )}
+          <button className="btn" onClick={sendOne} disabled={sending || !canSend}
+                  title={canSend
+                    ? 'Send exactly this message, now, to the address above'
+                    : 'Delivery is off for this meter, or email is off for the module'}>
+            {sending ? 'Sending…' : 'Send this one to me now'}
+          </button>
+          {msg ? <span className={msg.ok ? 'w-meter-ok' : 'err'}>{msg.text}</span> : null}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+// A value with its unit. Hours-of-the-day read as clock times because that is what they are:
+// "Overnight window starts: 2 o'clock" beats "2".
+function fmtSetting(s, override) {
+  const v = override === undefined ? s.value : override;
+  if (v === null || v === undefined || v === '') return '—';
+  return s.unit ? v + ' ' + s.unit : String(v);
+}
+
+function fmtDur(min) {
+  const m = Number(min) || 0;
+  if (m < 60) return m + ' minutes';
+  const h = Math.round(m / 60);
+  return h === 24 ? 'a day' : h + ' hours';
+}
+
+function frequency(a) {
+  if (a.key === 'summary') return 'once a day';
+  return 'at most once every ' + fmtDur(a.cooldown_min);
+}
+
+function frequencyLong(a) {
+  if (a.key === 'summary') {
+    return 'Once a day, whether anything happened or not. This is the proof-of-life email: if it '
+      + 'stops arriving, the alerting path itself has broken.';
+  }
+  return 'At most once every ' + fmtDur(a.cooldown_min) + ', however long the condition lasts.';
+}
+
+// The alerts block under one meter. Loaded on first open rather than with the page: it runs the
+// leak rules and formats six emails per meter, and the common reason to be on this page is to
+// rename something.
+function MeterAlerts({ m, emailEnabled, notify, to, onChanged }) {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open || data) return;
+    let live = true;
+    api.waterMeterAlerts(m.meter_id).then((r) => {
+      if (!live) return;
+      if (r.status === 200 && r.body.ok) setData(r.body);
+      else setErr(r.body.error || 'Could not load this meter’s alerts');
+    });
+    return () => { live = false; };
+  }, [open, data, m.meter_id]);
+
+  async function toggle(key, turningOff) {
+    setBusy(true);
+    const off = (data.alerts.filter((a) => a.state === 'off').map((a) => a.key));
+    const next = turningOff ? off.concat([key]) : off.filter((k) => k !== key);
+    const r = await api.waterSaveMeter(m.meter_id, { ...meterPatch(m), alerts_off: next });
+    setBusy(false);
+    if (r.status === 200 && r.body.ok) {
+      // Re-read rather than patching state locally. The server is what decides whether a key is
+      // suppressible, and a UI that assumes its own write succeeded exactly as sent is how a
+      // silently-refused change looks like a working one.
+      setData(null);
+      onChanged(r.body.meters);
+    } else setErr(r.body.error || 'Could not save');
+  }
+
+  // Everything the save endpoint needs to leave the OTHER fields alone. update() writes all of
+  // them every time, so omitting one would blank it.
+  function meterPatch(x) {
+    return { meter_name: x.meter_name || '', notify: !!x.notify,
+      notify_email: x.notify_email || '', gallons_per_unit: x.gallons_per_unit };
+  }
+
+  const canSend = emailEnabled && notify && !!to;
+
+  return (
+    <div className="w-alerts">
+      <button type="button" className="w-alerts-toggle" onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}>
+        <span className="w-alert-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        Alerts
+        <span className="muted small">
+          {open ? 'what each one sends, and whether it is on' : 'show what this meter sends'}
+        </span>
+      </button>
+
+      {open ? (
+        err ? <p className="err">{err}</p>
+        : !data ? <p className="muted small">Loading…</p>
+        : (
+          <>
+            <p className="muted small w-alerts-intro">
+              Turning one off stops the <b>email</b>. The rule still runs and still records what it
+              found, so the history and the Monitor stay honest either way.
+              {!canSend ? (
+                <b> Nothing here can send right now: {!emailEnabled
+                  ? 'email is switched off for the whole module.'
+                  : !notify ? 'delivery is off for this meter.' : 'this meter has no address.'}</b>
+              ) : null}
+            </p>
+            {data.alerts.map((a) => (
+              <AlertRow key={a.key} a={{ ...a, to: data.to }} meterId={m.meter_id}
+                        canSend={canSend} onToggle={toggle} busy={busy} />
+            ))}
+          </>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 function Row({ m, yours, ownEmail, emailEnabled, onSaved }) {
   const [name, setName] = useState(m.meter_name || '');
   const [notify, setNotify] = useState(!!m.notify);
@@ -159,6 +387,9 @@ function Row({ m, yours, ownEmail, emailEnabled, onSaved }) {
           )}
         </label>
       </div>
+
+      <MeterAlerts m={m} emailEnabled={emailEnabled} notify={notify} to={effective}
+                   onChanged={onSaved} />
 
       <div className="w-meter-actions">
         <button className="btn primary" onClick={save} disabled={busy || !dirty}>

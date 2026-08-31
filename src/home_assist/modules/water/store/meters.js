@@ -18,6 +18,9 @@
 const db = require('../../../store/db');
 const time = require('../../../time');
 const mailer = require('../../../notify/mailer');
+// For ALERT_CATALOG and is_suppressible only -- leak_rules is pure, so this adds no dependency of
+// substance and keeps the list of valid alert keys defined in exactly one place.
+const rules = require('../rules/leak_rules');
 
 /**
  * Record that these meters were heard, in one statement.
@@ -80,10 +83,36 @@ async function record_heard(seen, owned_meter_id) {
  * out a meter instead of offering a choice that produces an empty chart — an empty chart is
  * indistinguishable from a broken one.
  */
+/**
+ * water_meters.alerts_off -> a clean array of catalog keys.
+ *
+ * Validated against the CATALOG, not merely trimmed. An unknown key in that column is either a
+ * typo or a rule that has since been renamed, and either way keeping it would mean a switch the UI
+ * cannot show and nobody can turn back on. Dropping it fails the safe way for a leak monitor: the
+ * alert sends.
+ *
+ * `stale` and `never_decoded` are filtered out here as well as refused on write, because the column
+ * can be edited in MySQL and the watchdog is the one alert whose silence is unfalsifiable.
+ */
+function parse_alerts_off(raw) {
+  const known = rules.ALERT_CATALOG.map(function (c) { return c.key || c.kind; });
+  const seen = new Set();
+  return String(raw || '')
+    .split(/[,\s]+/)
+    .map(function (s) { return s.trim(); })
+    .filter(function (k) {
+      if (!k || seen.has(k)) return false;
+      if (known.indexOf(k) < 0) return false;
+      if (!rules.is_suppressible(k)) return false;
+      seen.add(k);
+      return true;
+    });
+}
+
 async function list() {
   const rows = await db.query(
     'SELECT m.meter_id, m.meter_name, m.model, m.owned, m.collect_readings, m.gallons_per_unit, ' +
-    '       m.notify, m.notify_email, ' +
+    '       m.notify, m.notify_email, m.alerts_off, ' +
     '       m.first_heard_utc, m.first_heard_mtn, m.last_heard_utc, m.last_heard_mtn, m.packets_seen, ' +
     '       EXISTS(SELECT 1 FROM water_packets p WHERE p.meter_id = m.meter_id) AS has_packets, ' +
     '       EXISTS(SELECT 1 FROM water_hourly  h WHERE h.meter_id = m.meter_id) AS has_readings ' +
@@ -101,6 +130,10 @@ async function list() {
       // opt-in and off for neighbours, so a stranger's shower can never wake you at 3am.
       notify: !!r.notify,
       notify_email: r.notify_email || '',
+      // Which individual alerts this meter does not email. An ARRAY out of here, a string in the
+      // column: every caller wants membership ("is 'summary' off?"), and leaving them to split a
+      // comma list themselves is how one of them ends up matching 'summary' inside 'daily_summary'.
+      alerts_off: parse_alerts_off(r.alerts_off),
       gallons_per_unit: Number(r.gallons_per_unit),
       first_heard_mtn: r.first_heard_mtn || null,
       last_heard_mtn: r.last_heard_mtn || null,
@@ -173,11 +206,22 @@ async function update(meter_id, patch, owned_meter_id) {
   let scale = Number(patch.gallons_per_unit);
   if (!Number.isFinite(scale) || scale <= 0) scale = 1;
 
+  // Absent means UNCHANGED, not "switch everything back on". The Meters form saves the name, the
+  // address and the scale together; a form that did not know about this field yet would otherwise
+  // silently re-enable every alert the user had turned off, which is the kind of quiet undo nobody
+  // attributes to the Save button they just pressed.
+  const alerts_off = patch.alerts_off === undefined
+    ? undefined
+    : parse_alerts_off(Array.isArray(patch.alerts_off) ? patch.alerts_off.join(',') : patch.alerts_off).join(',');
+
   try {
     await db.query(
-      'UPDATE water_meters SET meter_name = ?, notify = ?, notify_email = ?, gallons_per_unit = ? ' +
+      'UPDATE water_meters SET meter_name = ?, notify = ?, notify_email = ?, gallons_per_unit = ?' +
+      (alerts_off === undefined ? '' : ', alerts_off = ?') + ' ' +
       'WHERE meter_id = ?',
-      [meter_name, notify, notify_email, scale, id]
+      alerts_off === undefined
+        ? [meter_name, notify, notify_email, scale, id]
+        : [meter_name, notify, notify_email, scale, alerts_off, id]
     );
     return { ok: true };
   } catch (e) {
@@ -192,4 +236,4 @@ function recipients_for(meter, global_to) {
   return global_to || '';
 }
 
-module.exports = { record_heard, list, ensure_owned, update, recipients_for };
+module.exports = { record_heard, list, ensure_owned, update, recipients_for, parse_alerts_off };

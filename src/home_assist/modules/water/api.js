@@ -153,6 +153,29 @@ function deny(res) {
   return null;
 }
 
+/**
+ * The unit a setting is measured in, for pages that print its value.
+ *
+ * Derived from the NAME rather than added to every DEFS entry, because the naming convention is
+ * already total and consistent (`_gal`, `_min`, `_hours`, `_days`) and a second place to keep in
+ * step is a second place to forget. Returns '' when there is no sensible unit, and the caller then
+ * prints the bare number.
+ *
+ * The `_hour` / `_hours` pair is the one real trap: `overnight_start_hour` is a POINT in the day
+ * and `continuous_hours` is a DURATION. "Continuous flow window: 6 o'clock" would be wrong in a way
+ * that reads perfectly fluently, so they are separated explicitly rather than by a shared suffix.
+ */
+function unit_of(name) {
+  const n = String(name || '');
+  if (/_gal_per_hour$/.test(n)) return 'gal/hour';
+  if (/_gal$/.test(n)) return 'gal';
+  if (/_(min|minutes)$/.test(n)) return 'minutes';
+  if (/_hours$/.test(n)) return 'hours';
+  if (/_hour$/.test(n)) return 'o’clock';
+  if (/_days$/.test(n)) return 'days';
+  return '';
+}
+
 function keys_for_today(now, tz) {
   const day = time.day_key(now, tz);
   const out = [];
@@ -276,7 +299,11 @@ function mount(app) {
         return Object.assign({}, a, {
           settings: (a.settings || []).map(function (n) {
             const d = by_name[n] || {};
-            return { name: n, label: d.label || n, value: cfg[n], help: d.help || '' };
+            // `default` travels with `value`. A threshold reads very differently once you know
+            // whether it is the shipped number or one somebody chose: "60 minutes" alone cannot
+            // tell you whether this install has been tuned or never touched.
+            return { name: n, label: d.label || n, value: cfg[n], help: d.help || '',
+              default: d.default, unit: unit_of(n), type: d.type };
           }),
         });
       }),
@@ -546,6 +573,97 @@ function mount(app) {
     const r = await meters.update(req.params.id, req.body || {}, cfg.meter_id);
     if (!r.ok) return res.status(400).json(r);
     res.json({ ok: true, meters: await meters.list() });
+  }));
+
+  // ── one meter's alerts, spelled out ────────────────────────────────────────────────────────
+  //
+  // What the Meters page shows under each meter: for every alert in the catalog, whether it is on,
+  // when it fires AT THIS METER'S NUMBERS, where it goes, how often it can repeat, and the actual
+  // message it would send.
+  //
+  // The preview is not written here. rules.sample_alerts() runs the real rule functions and
+  // alerts.build_email() formats the result -- the same two steps, in the same order, that the
+  // collector performs when something really happens. Anything less and the page becomes a claim
+  // about the email rather than a view of it, and the first edit to either would make it a lie
+  // that nobody can see is a lie.
+  app.get('/api/water/meters/:id/alerts', require_panel('water-meters'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const id = Number(req.params.id) || 0;
+    if (!meter_access.is_allowed(req.user, req.role, id)) return deny(res);
+    const list = await meters.list();
+    const m = list.find(function (x) { return Number(x.meter_id) === id; });
+    if (!m) return res.status(404).json({ ok: false, error: 'no such meter' });
+
+    const by_name = {};
+    settings.describe(cfg).forEach(function (s) { by_name[s.name] = s; });
+    const to = meters.recipients_for(m, cfg.alert_email_to);
+    const samples = rules.sample_alerts(cfg, time.zone(), new Date());
+    // Real month totals for this meter, exactly as the collector resolves them, so the two month
+    // rows in the preview are this house's actual figures and not an illustration.
+    const months = await readings.month_totals(id).catch(function () { return null; });
+    const ctx = { meter_id: id, meter_name: m.meter_name || '', email_to: to, months: months };
+
+    const off = m.alerts_off || [];
+    res.json({
+      ok: true,
+      meter_id: id,
+      to: to,
+      // Three separate gates, reported separately, because "why did I not get an email" has three
+      // different answers and a single boolean would collapse them into one unhelpful one.
+      email_enabled: !!cfg.alert_email_enabled,
+      notify: !!m.notify,
+      tz: time.zone(),
+      alerts: rules.ALERT_CATALOG.map(function (a) {
+        const key = a.key || a.kind;
+        const sample = samples[key] || null;
+        const mail = sample ? alerts.build_email(sample, cfg, ctx) : null;
+        return {
+          key: key,
+          label: a.label,
+          severity: a.severity,
+          when: a.when,
+          why: a.why,
+          cooldown_min: a.cooldown_min,
+          // `always` is not "on" with the switch missing -- it is a different state, and drawing it
+          // as a checked box invites the reader to try to uncheck it.
+          state: !rules.is_suppressible(key) ? 'always' : (off.indexOf(key) >= 0 ? 'off' : 'on'),
+          settings: (a.settings || []).map(function (n) {
+            const d = by_name[n] || {};
+            return { name: n, label: d.label || n, value: cfg[n], default: d.default,
+              unit: unit_of(n), help: d.help || '' };
+          }),
+          preview: mail ? { subject: mail.subject, text: mail.text } : null,
+        };
+      }),
+    });
+  }));
+
+  // Send ONE alert's real email, on demand, to exactly where that alert would go.
+  //
+  // Separate from the "Send test email" button beside it, which proves the ADDRESS works with a
+  // stub message. This proves the MESSAGE works: that the thing arriving at 3am says something you
+  // can act on half-awake. Nothing is recorded in the alert history — no leak occurred, and a
+  // history that cannot be trusted to mean "this happened" is not a history.
+  app.post('/api/water/meters/:id/alerts/:key/test', require_panel('water-meters'), guard(async function (req, res) {
+    const cfg = await settings.all();
+    const id = Number(req.params.id) || 0;
+    if (!meter_access.is_allowed(req.user, req.role, id)) return deny(res);
+    const list = await meters.list();
+    const m = list.find(function (x) { return Number(x.meter_id) === id; });
+    if (!m) return res.status(404).json({ ok: false, error: 'no such meter' });
+
+    const key = String(req.params.key || '');
+    const sample = rules.sample_alerts(cfg, time.zone(), new Date())[key];
+    if (!sample) return res.status(404).json({ ok: false, error: 'no such alert: ' + key });
+
+    const to = meters.recipients_for(m, cfg.alert_email_to);
+    const months = await readings.month_totals(id).catch(function () { return null; });
+    const mail = alerts.build_email(sample, cfg, {
+      meter_id: id, meter_name: m.meter_name || '', email_to: to, months: months,
+    });
+    const r = await mailer.send({ to: to || undefined, subject: mail.subject, text: mail.text, html: mail.html });
+    res.json({ ok: true, sent: r.ok, to: to, subject: mail.subject,
+      accepted: r.accepted || [], rejected: r.rejected || [], error: r.error || null });
   }));
 
   // Prove the address works BEFORE a leak has to. A per-meter test send, using exactly the same
