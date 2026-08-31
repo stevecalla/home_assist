@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { num } from '../../lib/num.js';
 import BarChart from './BarChart.jsx';
 import MeterPicker from './MeterPicker.jsx';
 import { useMeterSel } from './meterSel.js';
@@ -228,8 +229,8 @@ export default function Diagnostics() {
                 {readings.map((r, i) => (
                   <tr key={i}>
                     <td style={{ whiteSpace: 'nowrap' }}>{r.read_at_mtn}</td>
-                    <td className="num">{Number(r.gallons).toLocaleString()}</td>
-                    <td className="num">+{Number(r.delta_gallons).toFixed(0)}</td>
+                    <td className="num">{num(r.gallons, 0)}</td>
+                    <td className="num">+{num(r.delta_gallons, 0)}</td>
                   </tr>
                 ))}
               </tbody>

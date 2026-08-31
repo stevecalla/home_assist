@@ -76,4 +76,8 @@ export const api = {
   waterMeters: () => jget('/api/water/meters'),
   waterSaveMeter: (id, patch) => jpost('/api/water/meters/' + encodeURIComponent(id), patch),
   waterTestMeterEmail: (id) => jpost('/api/water/meters/' + encodeURIComponent(id) + '/test', {}),
+  // Per-meter alerts: what each one says, and sending one of them for real.
+  waterMeterAlerts: (id) => jget('/api/water/meters/' + encodeURIComponent(id) + '/alerts'),
+  waterSendMeterAlert: (id, key) =>
+    jpost('/api/water/meters/' + encodeURIComponent(id) + '/alerts/' + encodeURIComponent(key) + '/test', {}),
 };

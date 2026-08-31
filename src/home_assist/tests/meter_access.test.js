@@ -160,7 +160,13 @@ test('the Reference page reports the user’s own meter, not the collector’s',
   const api = fs.readFileSync(require.resolve('../modules/water/api'), 'utf8');
   const i = api.indexOf("app.get('/api/water/reference'");
   assert.ok(i !== -1);
-  const seg = api.slice(i, i + 2200);
+  // To the START OF THE NEXT ROUTE, not a fixed character count. This read `slice(i, i + 2200)`,
+  // which passed for exactly as long as nobody added a comment above the line it was looking for --
+  // and then failed with the assertion pointing at a handler that was still perfectly correct. A
+  // test that measures in characters is measuring the wrong thing.
+  const rest = api.slice(i + 1);
+  const next = rest.search(/\n  app\.(get|post)\(/);
+  const seg = next === -1 ? rest : rest.slice(0, next);
   assert.match(seg, /meter_access\.primary\(req\.user, req\.role, cfg\.meter_id\)/);
 });
 

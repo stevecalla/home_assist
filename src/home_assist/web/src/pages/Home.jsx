@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { NAV, canSee } from '../nav.js';
 import { api } from '../lib/api.js';
+import { num } from '../lib/num.js';
 
 // Platform landing — a card per panel the signed-in user can reach, grouped like the rail, with a
 // live one-line water summary on top. The front door of the house dashboard.
@@ -36,7 +37,7 @@ export default function Home({ user }) {
         <Link to="/water/monitor" className={'banner banner-' + tone} style={{ textDecoration: 'none', display: 'block', marginTop: 16 }}>
           <strong>{water.leak.headline}</strong>
           <span className="muted" style={{ marginLeft: 10 }}>{water.leak.detail}</span>
-          <span style={{ float: 'right' }}>{Number(water.totals.today).toFixed(0)} gal today →</span>
+          <span style={{ float: 'right' }}>{num(water.totals.today, 0)} gal today →</span>
         </Link>
       ) : null}
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { num } from '../../lib/num.js';
 import MeterPicker from './MeterPicker.jsx';
 import { useMeterSel } from './meterSel.js';
 import './water.css';
@@ -68,7 +69,7 @@ function fmt_val(k, v) {
   if (v === true) return 'yes';
   if (v === false) return 'no';
   if (typeof v === 'number') {
-    const n = Number.isInteger(v) ? String(v) : v.toFixed(1);
+    const n = num(v, Number.isInteger(v) ? 0 : 1);
     return DETAIL_UNIT[k] ? n + ' ' + DETAIL_UNIT[k] : n;
   }
   return String(v);
@@ -109,7 +110,7 @@ function AlertDetail({ detail }) {
                 <td style={{ whiteSpace: 'nowrap' }}>{String(h.hour).replace('T', '  ')}:00</td>
                 {/* An em dash, never a 0. "No reading" and "no water" are opposite conclusions and
                     this is the table where someone decides whether to go and look at the basement. */}
-                <td className="num">{h.gallons === null ? '—' : h.gallons.toFixed(1)}</td>
+                <td className="num">{h.gallons === null ? '—' : num(h.gallons, 1)}</td>
               </tr>
             ))}
           </tbody>

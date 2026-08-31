@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/api.js';
+import { num, gal } from '../../lib/num.js';
 import BarChart from './BarChart.jsx';
 import HeartbeatChart from './HeartbeatChart.jsx';
 import RealtimeChart from './RealtimeChart.jsx';
@@ -313,6 +314,9 @@ export default function Monitor() {
   const hbHeaders = ['minute_mtn', 'odometer_gallons', 'packets', 'rssi_db', 'snr_db'];
   const hbRows = hb ? hb.series.map((p) => [p.minute_mtn, p.odometer, p.packets, p.rssi, p.snr]) : [];
   const lvHeaders = ['day_key', 'gallons', 'observed'];
+  // RAW on purpose. These rows are handed to CardTools' CSV export, and a grouped "2,480" is
+  // written to the file quoted and read back by a spreadsheet as text -- the column stops adding
+  // up. Grouping is a DISPLAY rule; see lib/num.js.
   const lvRows = lv ? lv.series.map((d) => [d.day_key, d.gallons.toFixed(1), d.observed ? 'yes' : 'no']) : [];
 
   // ── the Real time tab ──────────────────────────────────────────────────────────────────────
@@ -645,7 +649,7 @@ export default function Monitor() {
             </span>
             <span className="w-run-sub">
               {run.flowing
-                ? `${run.gallons.toFixed(0)} gal this run · ${run.rate.toFixed(1)} gal/min · ${RUN[run.level].note(run)}`
+                ? `${num(run.gallons, 0)} gal this run · ${run.rate.toFixed(1)} gal/min · ${RUN[run.level].note(run)}`
                 : 'Every fixture stops on its own. Something that never stops is what this watches for.'}
             </span>
           </span>
@@ -713,7 +717,7 @@ export default function Monitor() {
                 <div className="w-readout-lab" title={METRIC_HELP.since}>since last packet <i className="w-q">?</i></div>
               </div>
               <div>
-                <div className="w-readout-sm">{usedInWindow.toFixed(1)} gal</div>
+                <div className="w-readout-sm">{num(usedInWindow, 1)} gal</div>
                 <div className="w-readout-lab" title={METRIC_HELP.used_window}>used in window <i className="w-q">?</i></div>
               </div>
               <div>
@@ -728,7 +732,7 @@ export default function Monitor() {
           ) : lv ? (
             <>
               <div>
-                <div className="w-readout-sm">{lv.summary.total.toFixed(0)} gal</div>
+                <div className="w-readout-sm">{num(lv.summary.total, 0)} gal</div>
                 {/* Name the RANGE, not a day count: on a calendar period "total over 31 days" is
                     true but says nothing about which 31. */}
                 <div className="w-readout-lab">
@@ -736,7 +740,7 @@ export default function Monitor() {
                 </div>
               </div>
               <div>
-                <div className="w-readout-sm">{lv.summary.avg_day.toFixed(1)} gal</div>
+                <div className="w-readout-sm">{num(lv.summary.avg_day, 1)} gal</div>
                 {/* Averaged over the days that HAVE data, so a gap cannot understate it twice --
                     once in the total, again by dividing by days that were never recorded. */}
                 <div className="w-readout-lab">
@@ -919,7 +923,7 @@ export default function Monitor() {
                 // once the bars are too narrow, which is what keeps 90d and 365d readable.
                 showValues
                 formatTip={(d) => (d.observed
-                  ? `${d.key} — ${d.value.toFixed(0)} gal`
+                  ? `${d.key} — ${num(d.value, 0)} gal`
                   : `${d.key} — no data (the collector was not running)`)}
                 emptyMessage="No daily rollups yet."
               />
@@ -959,6 +963,7 @@ export default function Monitor() {
         {flipHourly ? (
           <DataTable
             headers={['hour_key', 'hour', 'gallons', 'observed']}
+            /* raw, not grouped -- these feed the CSV export. See lib/num.js. */
             rows={(hourly ? hourly.series : []).map((s) => [s.hour_key, s.hour, s.gallons.toFixed(1), s.observed ? 'yes' : 'no'])}
             note="Newest last. `observed` = no means the receiver was not listening — not that usage was zero."
           />
@@ -968,7 +973,7 @@ export default function Monitor() {
             data={bars}
             height={190}
             formatTip={(d) => (d.observed
-              ? `${d.label}:00 — ${d.value.toFixed(0)} gal`
+              ? `${d.label}:00 — ${num(d.value, 0)} gal`
               : `${d.label}:00 — no data (receiver was not listening)`)}
             emptyMessage="No readings yet. Start the collector: npm run water_collector"
           />
@@ -1077,7 +1082,7 @@ function renderPacketCell(quality, myMeter) {
           </span>
         );
       case 'num':
-        return Number(value).toLocaleString();
+        return num(value, 0);
       case 'delta': {
         // THREE states, drawn differently, because two of them were being collapsed into one.
         //   null  no previous packet from this meter yet — genuinely unknown
@@ -1137,7 +1142,7 @@ function Tile({ label, value, note, alarm, help }) {
     <div className="w-tile">
       <div className="w-tile-label" title={help || undefined}>{label}{help ? <i className="w-q">?</i> : null}</div>
       <div className="w-tile-value">
-        {Number(value).toFixed(value < 10 ? 1 : 0)}<span className="w-tile-unit">gal</span>
+        {gal(value)}<span className="w-tile-unit">gal</span>
       </div>
       {note ? <div className={'w-tile-note' + (alarm ? ' alarm' : '')}>{note}</div> : null}
     </div>

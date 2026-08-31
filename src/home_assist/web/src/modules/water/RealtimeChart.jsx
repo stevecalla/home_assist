@@ -1,4 +1,5 @@
 import { useState, useRef, useLayoutEffect } from 'react';
+import { num } from '../../lib/num.js';
 
 // Measured pixels, never a stretched viewBox — same rule as every other chart here.
 function useWidth() {
@@ -104,7 +105,7 @@ export default function RealtimeChart({
   });
 
   const ticks = [0, usedMax / 2, usedMax];
-  const fmtUsed = (v) => (usedMax < 4 ? v.toFixed(1) : Math.round(v).toString());
+  const fmtUsed = (v) => (usedMax < 4 ? num(v, 1) : num(Math.round(v), 0));
 
   const maxTicks = Math.max(2, Math.min(7, Math.floor(plotW / 92)));
   const STEPS = [10e3, 30e3, 60e3, 5 * 60e3, 15 * 60e3, 30 * 60e3, 3600e3, 3 * 3600e3, 6 * 3600e3];

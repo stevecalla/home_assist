@@ -1059,3 +1059,93 @@ th.w-grid-num { padding: 6px 8px; }
   position: absolute; top: 10px; right: 12px; border: 0; background: transparent;
   color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 6px 8px;
 }
+
+/* ── Per-meter alerts (Meters page) ───────────────────────────────────────────────────────────────
+ *
+ * A <details> per alert. Collapsed it is one line: name, state, how often. Opened it carries the
+ * settings that trigger it, where it goes, and the actual email.
+ *
+ * Every colour here is an EXISTING token, checked against styles.css and the top of this file. A
+ * custom property that is never defined, given an inline fallback colour, is not a theme-aware
+ * colour: it is a constant with a comment on it, and that is how the meter dropdown shipped
+ * invisible in light mode. (Written out in words rather than in CSS, because a scanner looking for
+ * undefined tokens reads a comment as code and reports the example as the offence — which has now
+ * happened three times.)
+ */
+.w-alerts { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+
+.w-alerts-toggle {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  background: transparent; border: 0; padding: 4px 0; cursor: pointer;
+  color: var(--ink); font-size: 13px; font-weight: 700; text-align: left;
+}
+.w-alerts-toggle:hover { color: var(--w-series); }
+.w-alerts-intro { margin: 6px 0 10px; }
+
+.w-alert-row {
+  border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--panel);
+}
+.w-alert-row[open] { border-color: var(--w-series); }
+.w-alert-row > summary {
+  list-style: none; cursor: pointer; padding: 9px 12px;
+  display: flex; align-items: center; gap: 10px; font-size: 13px;
+}
+.w-alert-row > summary::-webkit-details-marker { display: none; }
+.w-alert-row > summary:hover { background: var(--hover); border-radius: 8px; }
+/* The caret is drawn from the open state rather than swapped in JS, so it can never disagree with
+   the element it points at -- including when the browser opens one itself for in-page find. */
+.w-alert-caret { color: var(--w-axis); font-size: 10px; width: 10px; flex: none; }
+.w-alert-row[open] > summary .w-alert-caret { transform: rotate(90deg); display: inline-block; }
+.w-alert-name { font-weight: 600; flex: 1 1 auto; }
+
+/* Three states, three words. Colour never carries the meaning on its own -- same rule as the
+   chart's status colours, and for the same reason. */
+.w-alert-state {
+  font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 4px;
+  border: 1px solid currentColor; flex: none;
+}
+.w-alert-state.on { color: var(--w-good); }
+.w-alert-state.off { color: var(--w-axis); }
+.w-alert-state.always { color: var(--w-serious); }
+.w-alert-freq { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+
+.w-alert-body { padding: 2px 12px 12px 34px; }
+.w-alert-facts {
+  display: grid; grid-template-columns: 78px 1fr; gap: 4px 12px;
+  font-size: 12.5px; margin: 0 0 12px 0;
+}
+.w-alert-facts dt {
+  color: var(--w-axis); text-transform: uppercase; font-size: 10px;
+  letter-spacing: .05em; padding-top: 3px;
+}
+.w-alert-facts dd { margin: 0; line-height: 1.45; }
+.w-alert-sets { margin: 5px 0 0; padding-left: 18px; }
+.w-alert-sets li { margin-bottom: 2px; }
+
+.w-alert-note {
+  font-size: 12px; line-height: 1.5; margin: 0 0 12px 0; padding: 8px 10px;
+  border-radius: 6px; border: 1px solid var(--line); color: var(--muted);
+}
+
+.w-preview-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--w-axis); margin-bottom: 5px;
+}
+/* pre-wrap, because this is the plain-text part of the real email and its line breaks are the
+   layout. overflow-wrap so a long address cannot push the page sideways on a phone. */
+.w-preview {
+  border: 1px solid var(--line); border-left: 3px solid var(--w-series); border-radius: 6px;
+  background: var(--bg); padding: 11px 13px; font-size: 12.5px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 11px;
+}
+.w-preview .sub { font-weight: 700; display: block; margin-bottom: 8px; }
+.w-alert-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+@media (max-width: 560px) {
+  .w-alert-row > summary { flex-wrap: wrap; }
+  .w-alert-freq { flex-basis: 100%; padding-left: 20px; }
+  .w-alert-body { padding-left: 12px; }
+  .w-alert-facts { grid-template-columns: 1fr; gap: 1px 0; }
+  .w-alert-facts dd { margin-bottom: 7px; }
+  .w-alert-actions .btn { flex: 1 1 auto; }
+}

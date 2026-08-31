@@ -1,4 +1,5 @@
 import { useState, useRef, useLayoutEffect } from 'react';
+import { num } from '../../lib/num.js';
 
 // Measure the container so the SVG is drawn in REAL pixels.
 //
@@ -133,7 +134,7 @@ export default function BarChart({
                 onBlur={() => setHover(null)}
                 tabIndex={0}
                 role="button"
-                aria-label={`${d.label}: ${d.observed ? d.value.toFixed(0) + ' ' + unit : 'no data'}`}
+                aria-label={`${d.label}: ${d.observed ? num(d.value, 0) + ' ' + unit : 'no data'}`}
               />
               {!d.observed ? (
                 // no data: a thin recessive stub on the baseline — visibly different from a zero
@@ -182,7 +183,7 @@ export default function BarChart({
         >
           {formatTip ? formatTip(hover.d) : (
             <>
-              {hover.d.label} — <b>{hover.d.observed ? hover.d.value.toFixed(0) + ' ' + unit : 'no data'}</b>
+              {hover.d.label} — <b>{hover.d.observed ? num(hover.d.value, 0) + ' ' + unit : 'no data'}</b>
             </>
           )}
         </div>

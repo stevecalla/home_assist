@@ -415,6 +415,9 @@ async function create_collector(options) {
             // For a neighbour an id identifies nothing; for you with four meters it is a lookup.
             meter_name: m.meter_name || '',
             notify: !!m.notify,
+            // Per-alert switches for THIS meter. `notify` is all-or-nothing for the meter; this is
+            // the finer grain — the neighbour who wants overnight flow but not the daily summary.
+            alerts_off: m.alerts_off || [],
             email_to: meters.recipients_for(m, cfg.alert_email_to),
             last_gallons: (other_last.get(pid) || {}).gallons ?? null,
             // Month context on every alert. Resolved HERE rather than in alerts.js so that module
@@ -474,6 +477,9 @@ async function create_collector(options) {
         // Your own meter can have a dedicated address list too -- useful when the house alerts go
         // to two people but a second property should not.
         email_to: meters.recipients_for(owned_meter_row, cfg.alert_email_to),
+        // Your own meter's per-alert switches. The watchdog is not among them at any price --
+        // alerts.dispatch refuses to suppress `stale` however this list is built.
+        alerts_off: (owned_meter_row && owned_meter_row.alerts_off) || [],
         last_gallons: last ? last.gallons : null,
         today_gallons: rules.sum_hours(hours, today_keys).total,
       };
