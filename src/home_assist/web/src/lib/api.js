@@ -78,6 +78,12 @@ export const api = {
   waterTestMeterEmail: (id) => jpost('/api/water/meters/' + encodeURIComponent(id) + '/test', {}),
   // Per-meter alerts: what each one says, and sending one of them for real.
   waterMeterAlerts: (id) => jget('/api/water/meters/' + encodeURIComponent(id) + '/alerts'),
+  // ── metrics (Admin) ──
+  metrics: (days, opts) => jget('/api/metrics?days=' + (days || 7)
+    + (opts && opts.panel ? '&panel=' + encodeURIComponent(opts.panel) : '')
+    + (opts && opts.includeTest ? '&include_test=1' : '')),
+  metricsEvents: (limit) => jget('/api/metrics/events?limit=' + (limit || 200)),
+  metricsPurge: (mode) => jpost('/api/metrics/purge', { mode }),
   waterSendMeterAlert: (id, key) =>
     jpost('/api/water/meters/' + encodeURIComponent(id) + '/alerts/' + encodeURIComponent(key) + '/test', {}),
 };

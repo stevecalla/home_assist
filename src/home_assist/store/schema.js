@@ -86,6 +86,8 @@ const SHORT = {
     "One row per meter ever heard: label, model, whether it is yours, and when it was first and last seen. The source of truth for the meter selector.",
   water_packets:
     "Every decoded transmission, one row each, every meter in range -- the granular near-real-time view. Neighbours are captured for antenna work and never counted. Bounded by a short prune.",
+  home_assist_events:
+    "Usage analytics for the app itself: which panel was opened, which link 404d, what threw. Counts and enums only -- no PII beyond the login name.",
 };
 
 const PURPOSE_RECEPTION =
@@ -313,6 +315,57 @@ const TABLES = [
      KEY idx_heard (heard_at_utc)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
+
+  {
+    name: 'home_assist_events',
+    short: SHORT.home_assist_events,
+    purpose_after: 'id',
+    purpose:
+      'Usage analytics for the PLATFORM, not for the water. One row per thing that happened in a ' +
+      'browser: a panel opened, a filter run, a link that 404d, an access check that refused, an ' +
+      'error that was thrown. It exists because the questions worth asking about this app are the ' +
+      'ones you can only ask afterwards -- which link is broken, what threw at 3am, who was denied ' +
+      'what -- and nothing else records them. The column set is deliberately generic and shared by ' +
+      'every module; anything domain-specific goes in the meta JSON column, so this table never ' +
+      'grows a water field. NO PII beyond the login name already typed: no IP, no user agent, no ' +
+      'query values, no meter readings. Bounded by calendar year, two years kept.',
+    ddl: `CREATE TABLE IF NOT EXISTS home_assist_events (
+     id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+     purpose ${PURPOSE_COL}'${SHORT.home_assist_events}',
+     app            VARCHAR(32)  NOT NULL DEFAULT 'home_assist',
+     event_name     VARCHAR(48)  NOT NULL,
+     page_path      VARCHAR(255) NULL,
+     session_id     VARCHAR(64)  NULL COMMENT 'one sitting; resets on a new tab or a new login',
+     visitor_id     VARCHAR(64)  NULL COMMENT 'random id kept in that browser -- not a person',
+     is_returning   TINYINT(1)   NULL,
+     actor          VARCHAR(96)  NULL COMMENT 'the login name, stamped by the SERVER not the client',
+     role           VARCHAR(32)  NULL,
+     panel          VARCHAR(48)  NULL,
+     view           VARCHAR(255) NULL,
+     filter_name    VARCHAR(64)  NULL,
+     export_format  VARCHAR(16)  NULL,
+     row_count      INT          NULL,
+     duration_ms    INT          NULL,
+     error_type     VARCHAR(64)  NULL,
+     error_msg      VARCHAR(500) NULL,
+     event_at_local VARCHAR(32)  NULL COMMENT 'the BROWSER clock, which may differ from the house',
+     client_tz      VARCHAR(64)  NULL,
+     local_hour     TINYINT      NULL,
+     local_dow      TINYINT      NULL,
+     app_version    VARCHAR(32)  NULL,
+     engine         VARCHAR(32)  NULL,
+     viewport       VARCHAR(16)  NULL COMMENT 'mobile | desktop -- a bucket, never a pixel size',
+     theme          VARCHAR(16)  NULL,
+     is_test        TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1 = a ?metrics_test=1 sitting; excluded from headline figures',
+     env            VARCHAR(16)  NULL COMMENT 'dev | prod',
+     source         VARCHAR(16)  NULL COMMENT 'web | server',
+     meta           JSON         NULL COMMENT 'per-module escape hatch; keeps domain fields out of the core',${CREATED_AT},
+     PRIMARY KEY (id),
+     KEY idx_when (created_at_mtn),
+     KEY idx_event (event_name, created_at_mtn),
+     KEY idx_panel (panel, created_at_mtn)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  },
 ];
 
 /**
@@ -331,6 +384,14 @@ const ADDED_COLUMNS = [
   ['water_packets', 'purpose', purpose_def(SHORT.water_packets, 'heard_at_utc')],
   ['water_packets', 'created_at_mtn', 'DATETIME NULL'],
   ['water_packets', 'created_at_utc', 'DATETIME NULL'],
+
+  // home_assist_events is new, so CREATE TABLE IF NOT EXISTS builds it complete on every machine
+  // and these are redundant TODAY. They are here because the rule is unconditional: the moment
+  // anyone adds a column to that CREATE, the table already exists everywhere, and a table whose
+  // migration list was never started is the one where the omission is easiest to miss.
+  ['home_assist_events', 'purpose', purpose_def(SHORT.home_assist_events, 'id')],
+  ['home_assist_events', 'created_at_mtn', CREATED_MTN],
+  ['home_assist_events', 'created_at_utc', CREATED_UTC],
   ['water_reception', 'packets', 'INT UNSIGNED NOT NULL DEFAULT 0'],
   // 0, not the owned meter id: an existing row was raised before alerts knew about meters, and
   // stamping it with today's owned id would be inventing a fact. The API maps 0 to yours for

@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 // The SHARED collapsible card — the same component every water page uses. Its styles moved from
 // water.css to styles.css so a platform page can use it without importing a module's stylesheet.
 import CollapsibleCard from '../components/CollapsibleCard.jsx';
+import CardStack from '../components/CardStack.jsx';
 
 // Admin · Access — user management + panel access + meter access, over the admin-gated /api/admin/*
 // endpoints.
@@ -320,181 +321,195 @@ export default function Admin() {
     <div className="page">
       <h2>Users &amp; access</h2>
 
-      <CollapsibleCard
-        defaultOpen
-        title="Users"
-        sub={<>App logins. <code>.env</code> recovery accounts (<code>USATAPPS_ADMIN_*</code>, <code>USATAPPS_TEST_*</code>) are
-          always valid and can’t be removed; add app-specific users below. Role <b>admin</b> can reach this page —
-          and that is the ONLY way to grant it; “Users &amp; access” is not a tickable panel.</>}
-      >
-        <table className="grid">
-          <thead><tr><th>User</th><th>Role</th><th>Source</th><th /></tr></thead>
-          <tbody>
-            {!users && <tr><td className="muted">Loading…</td></tr>}
-            {users && users.map((u) => (
-              <tr key={u.user + u.source}>
-                <td>{u.user}</td>
-                <td><span style={rolePill(u.role)}>{u.role}</span></td>
-                <td><span style={srcPill(u.source)}>{u.source === 'env' ? 'recovery' : 'stored'}</span></td>
-                <td>{u.removable
-                  ? (<><button style={sbtn} onClick={() => resetPw(u.user)}>reset pw</button>{' '}
-                     <button style={{ ...sbtn, color: 'var(--red)', borderColor: 'var(--red)' }} onClick={() => removeUser(u.user)}>remove</button></>)
-                  : <span className="muted small">recovery</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="rowform" style={{ marginTop: 10, flexWrap: 'wrap' }}>
-          <input placeholder="username / email" value={nu} onChange={(e) => setNu(e.target.value)} autoComplete="off" />
-          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-            <input placeholder="password" type={showPw ? 'text' : 'password'} value={np} onChange={(e) => setNp(e.target.value)} autoComplete="new-password" style={{ paddingRight: 30 }} />
-            <button type="button" onClick={() => setShowPw((v) => !v)} title={showPw ? 'Hide password' : 'Show password'} aria-label={showPw ? 'Hide password' : 'Show password'}
-              style={{ position: 'absolute', right: 4, border: 0, background: 'transparent', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 2, color: 'var(--muted)' }}>{showPw ? '🙈' : '👁'}</button>
-          </span>
-          <select value={nr} onChange={(e) => setNr(e.target.value)}>
-            <option value="user">user</option><option value="admin">admin</option>
-          </select>
-          <button className="btn primary" style={{ whiteSpace: 'nowrap', flexShrink: 0 }} onClick={saveUser}>Add / update user</button>
-          {msg(uMsg)}
-        </div>
-        <p className="muted small" style={{ margin: '10px 0 0', borderLeft: '3px solid var(--line)', paddingLeft: 8 }}>
-          📁 <strong>Where this data lives:</strong> stored users in <code>auth.json</code> (scrypt‑hashed) and panel access in <code>panel_access.json</code> — in the platform data folder <em>outside the repo, not in the database</em>. Recovery accounts come from <code>.env</code> (<code>USATAPPS_ADMIN_*</code> / <code>USATAPPS_TEST_*</code>).
-        </p>
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        defaultOpen={false}
-        title="Panel access — general default"
-        sub="Which panels non-admin users see by default. Admins always see every panel."
-      >
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <label style={rlab}><input type="radio" name="defmode" checked={defMode === 'all'} onChange={() => setDefMode('all')} /> All panels</label>
-          <label style={rlab}><input type="radio" name="defmode" checked={defMode === 'some'} onChange={() => setDefMode('some')} /> Only selected</label>
-        </div>
-        {defMode === 'some'
-          ? qlist(defSet, setDefSet, false)
-          : (<>
-              <p className="muted small" style={{ margin: '10px 0 0' }}>
-                “All panels” means everything <b>except</b> the held-back ones below — those always
-                need an explicit grant. This is what it resolves to:
-              </p>
-              {qlist(allSet(), () => {}, true)}
-            </>)}
-        <button className="btn primary" style={{ marginTop: 12 }} onClick={saveDefault}>Save default</button>{msg(defMsg)}
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        defaultOpen={false}
-        title="Panel access — per user"
-        sub="Override the default for one user. “Use default” removes the override."
-      >
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label className="small">User&nbsp;
-            <select value={selUser} onChange={(e) => setSelUser(e.target.value)}>
-              <option value="">—</option>
-              {knownUsers.map((u) => <option key={u} value={u}>{u}</option>)}
-            </select>
-          </label>
-          <label style={rlab}><input type="radio" name="usermode" checked={uMode === 'default'} onChange={() => setUMode('default')} /> Use default</label>
-          <label style={rlab}><input type="radio" name="usermode" checked={uMode === 'all'} onChange={() => setUMode('all')} /> All panels</label>
-          <label style={rlab}><input type="radio" name="usermode" checked={uMode === 'some'} onChange={() => setUMode('some')} /> Only selected</label>
-        </div>
-        {selUser && (() => {
-          const e = effectiveAccess();
-          const m = effectiveMeters();
-          let mbody;
-          if (m.kind === 'admin') mbody = <em>all meters — admin role</em>;
-          else if (m.kind === 'all') mbody = <span>all meters <span className="muted">({m.src})</span></span>;
-          else if (m.ids.length) mbody = <span>{m.ids.map(meterLabel).join(', ')} <span className="muted">({m.src})</span></span>;
-          else mbody = <span><em>no meters</em> <span className="muted">({m.src})</span></span>;
-          let body;
-          if (e.kind === 'admin') body = <em>all panels — admin role (panel access doesn’t apply)</em>;
-          else if (e.kind === 'all') body = <span>all panels <span className="muted">({e.src})</span></span>;
-          // Filter through the same rule the server enforces. Listing a panel the authorization
-          // check will refuse is how "I granted it and it did nothing" happens.
-          else if (e.keys.filter((k) => NOT_GRANTABLE.indexOf(k) < 0).length) {
-            body = (
-              <span>{e.keys.filter((k) => NOT_GRANTABLE.indexOf(k) < 0).map(panelLabel).join(', ')}
-                {' '}<span className="muted">({e.src})</span></span>
-            );
-          } else body = <span><em>no panels</em> <span className="muted">({e.src})</span></span>;
-          return (
-            <div className="small" style={{ margin: '10px 0', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)' }}>
-              <div><strong>{selUser}</strong> — pages: {body}</div>
-              <div style={{ marginTop: 4 }}><strong>{selUser}</strong> — meters: {mbody}</div>
+      {/* The five cards, in whatever order this reader put them. Admin is opened for two very
+          different reasons -- adding a login, or auditing who can see what -- and the card you want
+          at the top depends entirely on which. See components/CardStack.jsx. */}
+      <CardStack
+        storageKey="admin"
+        items={[
+          { id: 'users', label: 'Users', node: (
+          <CollapsibleCard
+            defaultOpen
+            title="Users"
+            sub={<>App logins. <code>.env</code> recovery accounts (<code>USATAPPS_ADMIN_*</code>, <code>USATAPPS_TEST_*</code>) are
+              always valid and can’t be removed; add app-specific users below. Role <b>admin</b> can reach this page —
+              and that is the ONLY way to grant it; “Users &amp; access” is not a tickable panel.</>}
+          >
+            <table className="grid">
+              <thead><tr><th>User</th><th>Role</th><th>Source</th><th /></tr></thead>
+              <tbody>
+                {!users && <tr><td className="muted">Loading…</td></tr>}
+                {users && users.map((u) => (
+                  <tr key={u.user + u.source}>
+                    <td>{u.user}</td>
+                    <td><span style={rolePill(u.role)}>{u.role}</span></td>
+                    <td><span style={srcPill(u.source)}>{u.source === 'env' ? 'recovery' : 'stored'}</span></td>
+                    <td>{u.removable
+                      ? (<><button style={sbtn} onClick={() => resetPw(u.user)}>reset pw</button>{' '}
+                         <button style={{ ...sbtn, color: 'var(--red)', borderColor: 'var(--red)' }} onClick={() => removeUser(u.user)}>remove</button></>)
+                      : <span className="muted small">recovery</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="rowform" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+              <input placeholder="username / email" value={nu} onChange={(e) => setNu(e.target.value)} autoComplete="off" />
+              <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                <input placeholder="password" type={showPw ? 'text' : 'password'} value={np} onChange={(e) => setNp(e.target.value)} autoComplete="new-password" style={{ paddingRight: 30 }} />
+                <button type="button" onClick={() => setShowPw((v) => !v)} title={showPw ? 'Hide password' : 'Show password'} aria-label={showPw ? 'Hide password' : 'Show password'}
+                  style={{ position: 'absolute', right: 4, border: 0, background: 'transparent', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 2, color: 'var(--muted)' }}>{showPw ? '🙈' : '👁'}</button>
+              </span>
+              <select value={nr} onChange={(e) => setNr(e.target.value)}>
+                <option value="user">user</option><option value="admin">admin</option>
+              </select>
+              <button className="btn primary" style={{ whiteSpace: 'nowrap', flexShrink: 0 }} onClick={saveUser}>Add / update user</button>
+              {msg(uMsg)}
             </div>
-          );
-        })()}
-        {uMode === 'some' ? qlist(uSet, setUSet, false) : (
-          <>
-            <p className="muted small" style={{ margin: '10px 0 0' }}>
-              {uMode === 'default'
-                ? 'Inherited from the general default above. Shown read-only:'
-                : '“All panels” minus the held-back ones. Shown read-only:'}
+            <p className="muted small" style={{ margin: '10px 0 0', borderLeft: '3px solid var(--line)', paddingLeft: 8 }}>
+              📁 <strong>Where this data lives:</strong> stored users in <code>auth.json</code> (scrypt‑hashed) and panel access in <code>panel_access.json</code> — in the platform data folder <em>outside the repo, not in the database</em>. Recovery accounts come from <code>.env</code> (<code>USATAPPS_ADMIN_*</code> / <code>USATAPPS_TEST_*</code>).
             </p>
-            {qlist(uMode === 'default' ? defaultSet() : allSet(), () => {}, true)}
-          </>
-        )}
-        <button className="btn primary" style={{ marginTop: 12 }} onClick={saveUserAccess} disabled={!selUser}>Save user</button>{msg(accMsg)}
-        <p className="muted small" style={{ marginTop: 12 }}>
-          The <b>Admin</b> page itself is governed by the <b>admin</b> role, not by panel access — a non-admin can
-          never reach user management even if granted other panels. That is why <b>Users &amp; access</b> is
-          shown greyed out above: to make someone an admin, re-add them with the <b>admin</b> role
-          (Users section, or <code>node src/home_assist/admin.js add &lt;user&gt;</code>).
-        </p>
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        defaultOpen={false}
-        title="Meter access — general default"
-        sub="Which water meters non-admin users see by default. Admins always see every meter. This is a separate question from panel access: it decides WHOSE DATA the pages show, not which pages open."
-      >
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <label style={rlab}><input type="radio" name="mdefmode" checked={mDefMode === 'all'} onChange={() => setMDefMode('all')} /> All meters</label>
-          <label style={rlab}><input type="radio" name="mdefmode" checked={mDefMode === 'some'} onChange={() => setMDefMode('some')} /> Only selected</label>
-        </div>
-        {mDefMode === 'some'
-          ? mlist(mDefSet, setMDefSet, false)
-          : (<>
-              <p className="muted small" style={{ margin: '10px 0 0' }}>
-                “All meters” includes meters heard in the future, not just the ones listed below.
-              </p>
-              {mlist(mAllSet(), () => {}, true)}
-            </>)}
-        <button className="btn primary" style={{ marginTop: 12 }} onClick={saveMeterDefault}>Save default</button>{msg(mDefMsg)}
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        defaultOpen={false}
-        title="Meter access — per user"
-        sub="Override the meter default for one user. Uses the same user picked above. “Use default” removes the override."
-      >
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label className="small">User&nbsp;
-            <select value={selUser} onChange={(e) => setSelUser(e.target.value)}>
-              <option value="">—</option>
-              {knownUsers.map((u) => <option key={u} value={u}>{u}</option>)}
-            </select>
-          </label>
-          <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'default'} onChange={() => setMUMode('default')} /> Use default</label>
-          <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'all'} onChange={() => setMUMode('all')} /> All meters</label>
-          <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'some'} onChange={() => setMUMode('some')} /> Only selected</label>
-        </div>
-        {mUMode === 'some' ? mlist(mUSet, setMUSet, false) : (
-          <>
-            <p className="muted small" style={{ margin: '10px 0 0' }}>
-              {mUMode === 'default' ? 'Inherited from the general default above. Shown read-only:' : 'Every meter, now and in future. Shown read-only:'}
+          </CollapsibleCard>
+          ) },
+          { id: 'panel-default', label: 'Panel access — general default', node: (
+          <CollapsibleCard
+            defaultOpen={false}
+            title="Panel access — general default"
+            sub="Which panels non-admin users see by default. Admins always see every panel."
+          >
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+              <label style={rlab}><input type="radio" name="defmode" checked={defMode === 'all'} onChange={() => setDefMode('all')} /> All panels</label>
+              <label style={rlab}><input type="radio" name="defmode" checked={defMode === 'some'} onChange={() => setDefMode('some')} /> Only selected</label>
+            </div>
+            {defMode === 'some'
+              ? qlist(defSet, setDefSet, false)
+              : (<>
+                  <p className="muted small" style={{ margin: '10px 0 0' }}>
+                    “All panels” means everything <b>except</b> the held-back ones below — those always
+                    need an explicit grant. This is what it resolves to:
+                  </p>
+                  {qlist(allSet(), () => {}, true)}
+                </>)}
+            <button className="btn primary" style={{ marginTop: 12 }} onClick={saveDefault}>Save default</button>{msg(defMsg)}
+          </CollapsibleCard>
+          ) },
+          { id: 'panel-user', label: 'Panel access — per user', node: (
+          <CollapsibleCard
+            defaultOpen={false}
+            title="Panel access — per user"
+            sub="Override the default for one user. “Use default” removes the override."
+          >
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label className="small">User&nbsp;
+                <select value={selUser} onChange={(e) => setSelUser(e.target.value)}>
+                  <option value="">—</option>
+                  {knownUsers.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </label>
+              <label style={rlab}><input type="radio" name="usermode" checked={uMode === 'default'} onChange={() => setUMode('default')} /> Use default</label>
+              <label style={rlab}><input type="radio" name="usermode" checked={uMode === 'all'} onChange={() => setUMode('all')} /> All panels</label>
+              <label style={rlab}><input type="radio" name="usermode" checked={uMode === 'some'} onChange={() => setUMode('some')} /> Only selected</label>
+            </div>
+            {selUser && (() => {
+              const e = effectiveAccess();
+              const m = effectiveMeters();
+              let mbody;
+              if (m.kind === 'admin') mbody = <em>all meters — admin role</em>;
+              else if (m.kind === 'all') mbody = <span>all meters <span className="muted">({m.src})</span></span>;
+              else if (m.ids.length) mbody = <span>{m.ids.map(meterLabel).join(', ')} <span className="muted">({m.src})</span></span>;
+              else mbody = <span><em>no meters</em> <span className="muted">({m.src})</span></span>;
+              let body;
+              if (e.kind === 'admin') body = <em>all panels — admin role (panel access doesn’t apply)</em>;
+              else if (e.kind === 'all') body = <span>all panels <span className="muted">({e.src})</span></span>;
+              // Filter through the same rule the server enforces. Listing a panel the authorization
+              // check will refuse is how "I granted it and it did nothing" happens.
+              else if (e.keys.filter((k) => NOT_GRANTABLE.indexOf(k) < 0).length) {
+                body = (
+                  <span>{e.keys.filter((k) => NOT_GRANTABLE.indexOf(k) < 0).map(panelLabel).join(', ')}
+                    {' '}<span className="muted">({e.src})</span></span>
+                );
+              } else body = <span><em>no panels</em> <span className="muted">({e.src})</span></span>;
+              return (
+                <div className="small" style={{ margin: '10px 0', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)' }}>
+                  <div><strong>{selUser}</strong> — pages: {body}</div>
+                  <div style={{ marginTop: 4 }}><strong>{selUser}</strong> — meters: {mbody}</div>
+                </div>
+              );
+            })()}
+            {uMode === 'some' ? qlist(uSet, setUSet, false) : (
+              <>
+                <p className="muted small" style={{ margin: '10px 0 0' }}>
+                  {uMode === 'default'
+                    ? 'Inherited from the general default above. Shown read-only:'
+                    : '“All panels” minus the held-back ones. Shown read-only:'}
+                </p>
+                {qlist(uMode === 'default' ? defaultSet() : allSet(), () => {}, true)}
+              </>
+            )}
+            <button className="btn primary" style={{ marginTop: 12 }} onClick={saveUserAccess} disabled={!selUser}>Save user</button>{msg(accMsg)}
+            <p className="muted small" style={{ marginTop: 12 }}>
+              The <b>Admin</b> page itself is governed by the <b>admin</b> role, not by panel access — a non-admin can
+              never reach user management even if granted other panels. That is why <b>Users &amp; access</b> is
+              shown greyed out above: to make someone an admin, re-add them with the <b>admin</b> role
+              (Users section, or <code>node src/home_assist/admin.js add &lt;user&gt;</code>).
             </p>
-            {mlist(mUMode === 'default' ? mDefaultSet() : mAllSet(), () => {}, true)}
-          </>
-        )}
-        <button className="btn primary" style={{ marginTop: 12 }} onClick={saveUserMeters} disabled={!selUser}>Save user</button>{msg(mAccMsg)}
-        <p className="muted small" style={{ marginTop: 12 }}>
-          Restricting someone to one meter also changes what <b>“This meter”</b> means for them — it resolves to
-          the first meter they are allowed, not to the collector’s own meter. Requesting a meter outside the
-          grant returns <code>403</code>, and “All meters” views are filtered to the grant rather than left open.
-        </p>
-      </CollapsibleCard>
+          </CollapsibleCard>
+          ) },
+          { id: 'meter-default', label: 'Meter access — general default', node: (
+          <CollapsibleCard
+            defaultOpen={false}
+            title="Meter access — general default"
+            sub="Which water meters non-admin users see by default. Admins always see every meter. This is a separate question from panel access: it decides WHOSE DATA the pages show, not which pages open."
+          >
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+              <label style={rlab}><input type="radio" name="mdefmode" checked={mDefMode === 'all'} onChange={() => setMDefMode('all')} /> All meters</label>
+              <label style={rlab}><input type="radio" name="mdefmode" checked={mDefMode === 'some'} onChange={() => setMDefMode('some')} /> Only selected</label>
+            </div>
+            {mDefMode === 'some'
+              ? mlist(mDefSet, setMDefSet, false)
+              : (<>
+                  <p className="muted small" style={{ margin: '10px 0 0' }}>
+                    “All meters” includes meters heard in the future, not just the ones listed below.
+                  </p>
+                  {mlist(mAllSet(), () => {}, true)}
+                </>)}
+            <button className="btn primary" style={{ marginTop: 12 }} onClick={saveMeterDefault}>Save default</button>{msg(mDefMsg)}
+          </CollapsibleCard>
+          ) },
+          { id: 'meter-user', label: 'Meter access — per user', node: (
+          <CollapsibleCard
+            defaultOpen={false}
+            title="Meter access — per user"
+            sub="Override the meter default for one user. Uses the same user picked above. “Use default” removes the override."
+          >
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label className="small">User&nbsp;
+                <select value={selUser} onChange={(e) => setSelUser(e.target.value)}>
+                  <option value="">—</option>
+                  {knownUsers.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </label>
+              <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'default'} onChange={() => setMUMode('default')} /> Use default</label>
+              <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'all'} onChange={() => setMUMode('all')} /> All meters</label>
+              <label style={rlab}><input type="radio" name="musermode" checked={mUMode === 'some'} onChange={() => setMUMode('some')} /> Only selected</label>
+            </div>
+            {mUMode === 'some' ? mlist(mUSet, setMUSet, false) : (
+              <>
+                <p className="muted small" style={{ margin: '10px 0 0' }}>
+                  {mUMode === 'default' ? 'Inherited from the general default above. Shown read-only:' : 'Every meter, now and in future. Shown read-only:'}
+                </p>
+                {mlist(mUMode === 'default' ? mDefaultSet() : mAllSet(), () => {}, true)}
+              </>
+            )}
+            <button className="btn primary" style={{ marginTop: 12 }} onClick={saveUserMeters} disabled={!selUser}>Save user</button>{msg(mAccMsg)}
+            <p className="muted small" style={{ marginTop: 12 }}>
+              Restricting someone to one meter also changes what <b>“This meter”</b> means for them — it resolves to
+              the first meter they are allowed, not to the collector’s own meter. Requesting a meter outside the
+              grant returns <code>403</code>, and “All meters” views are filtered to the grant rather than left open.
+            </p>
+          </CollapsibleCard>
+          ) },
+        ]}
+      />
     </div>
   );
 }

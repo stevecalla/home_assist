@@ -939,3 +939,46 @@ table.grid td {
 /* A collapsed card is just its header — no dead padding under the title. */
 .ha-card.is-collapsed { padding-bottom: 12px; }
 .ha-card.is-collapsed .ha-card-head { margin-bottom: 0; }
+
+/* ── CardStack: cards the reader can reorder ─────────────────────────────────────────────────────
+   The grip column sits OUTSIDE the card rather than inside its header, so it cannot be confused
+   with the card's own controls and does not shift the title. It is faint until hovered: a control
+   for occasionally rearranging a page should not compete with the page. */
+.ha-stack-item { display: flex; align-items: flex-start; gap: 6px; }
+.ha-stack-body { flex: 1 1 auto; min-width: 0; }   /* min-width:0 or a wide table stops the flex item shrinking */
+
+.ha-stack-grip {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding-top: 14px; opacity: .28; transition: opacity .12s ease;
+}
+.ha-stack-item:hover .ha-stack-grip,
+.ha-stack-grip:focus-within { opacity: 1; }
+
+.ha-grip { cursor: grab; font-size: 13px; line-height: 1; color: var(--muted); user-select: none; }
+.ha-grip:active { cursor: grabbing; }
+
+.ha-stack-btn {
+  border: 1px solid transparent; background: transparent; color: var(--muted);
+  font-size: 9px; line-height: 1; padding: 2px 3px; border-radius: 3px; cursor: pointer;
+}
+.ha-stack-btn:hover:not(:disabled) { border-color: var(--line); color: var(--ink); }
+/* Focus must be VISIBLE: these buttons are the keyboard path, and an invisible focus ring makes
+   the accessible route the unusable one. */
+.ha-stack-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ha-stack-btn:disabled { opacity: .3; cursor: default; }
+
+.ha-stack-item.is-dragging { opacity: .45; }
+/* A line where it will land, not a box around what it is over — the question being answered is
+   "where does this go", not "what am I hovering". */
+.ha-stack-item.is-over .ha-stack-body { box-shadow: 0 3px 0 -1px var(--accent); }
+
+.ha-stack-reset { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+.btn.small { font-size: 12px; padding: 3px 9px; }
+
+/* On a phone the grip column costs width the cards need, and dragging a full-width card in a
+   scrolling page fights the scroll. The buttons stay; they are the ones that work here anyway. */
+@media (max-width: 560px) {
+  .ha-stack-item { gap: 4px; }
+  .ha-stack-grip { padding-top: 12px; opacity: .6; }
+  .ha-grip { display: none; }
+}

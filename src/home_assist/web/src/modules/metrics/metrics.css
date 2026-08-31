@@ -1,0 +1,42 @@
+/* Metrics page. Every colour is an existing token from styles.css or the water module's palette --
+   checked, not assumed. A custom property that is never defined but carries an inline fallback is a
+   constant with a comment on it, which is how the meter dropdown once shipped invisible in light
+   mode. */
+
+.m-root .m-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px;
+}
+.m-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.m-check input { margin: 0; }
+.m-since { margin-left: auto; }
+
+.m-tiles { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.m-tile {
+  flex: 1 1 130px; min-width: 120px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 10px 12px;
+}
+/* A count that is not zero on the Issues row is the whole point of the page, so it gets a border
+   AND the number in the same colour -- never colour alone, same rule as the charts. */
+.m-tile.alarm { border-color: var(--w-serious); }
+.m-tile.alarm .m-tile-value { color: var(--w-serious); }
+.m-tile-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--w-axis); }
+.m-tile-value { font-size: 22px; font-weight: 700; line-height: 1.2; margin-top: 3px; }
+
+.m-h4 { margin: 16px 0 6px; font-size: 12.5px; font-weight: 700; }
+.m-h4:first-child { margin-top: 0; }
+
+.m-table-wrap { margin-bottom: 4px; }
+/* Wide tables scroll INSIDE their own box. The page body must never scroll sideways -- this is a
+   page people open on a phone at 2am. */
+.m-table-scroll { overflow-x: auto; max-width: 100%; }
+
+.m-quiet { border-color: var(--w-serious); }
+
+.m-purge { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.m-purge .btn.danger { border-color: var(--w-serious); color: var(--w-serious); }
+
+@media (max-width: 560px) {
+  .m-since { margin-left: 0; flex-basis: 100%; }
+  .m-tile { flex-basis: calc(50% - 5px); }
+  .m-purge .btn { flex: 1 1 auto; }
+}

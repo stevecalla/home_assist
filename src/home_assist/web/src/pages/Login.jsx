@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { api } from '../lib/api.js';
-import { trackSession } from '../lib/track.js';
+import { trackSession, newSession } from '../lib/track.js';
 
 // Local username/password login. Same layout as the usat_apps sign-in: a centered card on the
 // branded backdrop. The recovery admin comes from .env (HOMEASSIST_ADMIN_USER / _PASS); everyone
@@ -18,7 +18,10 @@ export default function Login({ onLogin }) {
     const { status, body } = await api.login(username, password);
     setBusy(false);
     if (status === 200 && body.ok) {
-      try { trackSession('login'); } catch (e2) { /* best-effort */ }
+      // A new session id per sign-in, so two people using the same browser are two sittings in
+      // the metrics rather than one long confusing one. Minted BEFORE the login event, so that
+      // event is the first row of the session it belongs to.
+      try { newSession(); trackSession('login'); } catch (e2) { /* best-effort */ }
       onLogin(body);
     } else {
       setErr(body.error || 'Sign in failed');

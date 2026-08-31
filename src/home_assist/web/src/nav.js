@@ -14,6 +14,7 @@ const WaterSettings = lazy(() => import('./modules/water/Settings.jsx'));
 const WaterMeters = lazy(() => import('./modules/water/Meters.jsx'));
 const WaterDiagnostics = lazy(() => import('./modules/water/Diagnostics.jsx'));
 const WaterReference = lazy(() => import('./modules/water/Reference.jsx'));
+const Metrics = lazy(() => import('./modules/metrics/Metrics.jsx'));
 
 export const NAV = [
   {
@@ -34,6 +35,11 @@ export const NAV = [
   {
     type: 'group', label: 'Admin', defaultCollapsed: true, items: [
       { label: 'Users & access', path: '/admin/users', panel: 'admin', icon: '👤', Component: Admin },
+      // A NORMAL panel key, not the role-gated 'admin' one. It shows in the access panel and can be
+      // granted deliberately; it is simply excluded from the 'all' default (panel_access.
+      // DEFAULT_ALL_EXCLUDE), so it is admin-only until somebody hands it out. Purging the table is
+      // admin-only regardless of the grant.
+      { label: 'Metrics', path: '/admin/metrics', panel: 'metrics', icon: '📊', Component: Metrics },
     ],
   },
 ];

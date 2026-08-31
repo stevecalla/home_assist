@@ -19,9 +19,14 @@
  * Nothing else in the platform changes — panel access, nav gating, and API mounting all read from here.
  */
 const water = require('./water/module');
+// The platform's own usage analytics. A module like any other -- it contributes a panel, mounts its
+// routes, and is gated by the same access control -- which is the point: the metrics stack does not
+// get to be a special case in the shell.
+const metrics = require('./metrics/module');
 
 const MODULES = [
   water,
+  metrics,
   // thermostat,   // next feature goes here
 ];
 

@@ -126,3 +126,7 @@ playwright/.cache/
 Thumbs.db
 ehthumbs.db
 desktop.ini
+
+# Vite writes these beside vite.config.js on every build and does not always clean them up.
+# Two got committed; they are build junk, never source.
+src/home_assist/web/vite.config.js.timestamp-*.mjs
