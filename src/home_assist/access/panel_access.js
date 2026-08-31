@@ -24,7 +24,13 @@ const PLATFORM_PANELS = [
 // These are the three that CHANGE something or expose the plumbing: thresholds and recipients
 // (settings), which meters may email whom (meters), and the raw decoder feed plus the SMTP check
 // (diagnostics). Reading the water data is the default; altering who gets woken at 3am is not.
-const DEFAULT_ALL_EXCLUDE = ['admin', 'water-settings', 'water-meters', 'water-diagnostics'];
+//
+// `metrics` is here for a different reason: it changes nothing, but it READS which pages each user
+// opened and when, which is the most personal thing this app stores. It stays GRANTABLE -- it
+// appears in the access panel and an admin can hand it out deliberately -- it simply is not part of
+// the 'all' default, so it is admin-only until somebody decides otherwise. (Purging the table is
+// admin-only regardless of the grant; see modules/metrics/api.js.)
+const DEFAULT_ALL_EXCLUDE = ['admin', 'water-settings', 'water-meters', 'water-diagnostics', 'metrics'];
 
 /**
  * Panel keys that no longer exist, and what they meant.

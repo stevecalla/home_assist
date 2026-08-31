@@ -7,6 +7,12 @@
    surface tint rather than a second hue. Status colors are the reserved status palette and always
    ship with an icon + a word, never color alone. */
 
+/* NOTE: `.w-root` is the scope for the app's DATA-VIZ PALETTE, not a water-only class. Any page
+   that uses a --w-* token -- the metrics module does -- must carry `w-root` on its root element,
+   or every one of those tokens resolves to an EMPTY STRING and each colour quietly becomes the
+   inherited text colour. That failure is invisible: the bars still draw, and an "alarm" border
+   comes out the same shade as everything around it. Declared on a class rather than :root so the
+   palette cannot leak into the platform shell's own surfaces. */
 .w-root {
   --w-series:        #2a78d6;   /* categorical slot 1, light */
   --w-series-soft:   rgba(42, 120, 214, .18);
