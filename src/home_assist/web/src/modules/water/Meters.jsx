@@ -121,8 +121,12 @@ function Row({ m, yours, ownEmail, emailEnabled, onSaved }) {
           </span>
           <span className="w-field-help">
             The rules run either way. This decides whether anyone is told.
+            {/* Names the DESTINATION rather than guessing whose inbox it is. This read "would go to
+                your inbox", which is written from the owner's chair: a neighbour reading their own
+                meter row sees "your inbox" and takes it to mean theirs, so the warning states the
+                opposite of what is true for the person most likely to be reading it. */}
             {!m.owned && !email.trim()
-              ? <b> Give this meter its own address first — without one its alerts would go to your inbox.</b>
+              ? <b> Give this meter its own address first — without one its alerts go to the global list.</b>
               : null}
           </span>
         </label>
