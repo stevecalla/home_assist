@@ -394,3 +394,45 @@ test('run_spans: agrees with current_run about the newest run', function () {
   assert.strictEqual(newest.level, now.level);
   assert.strictEqual(newest.gallons, now.gallons);
 });
+
+// ── the summary's comparison window is a contract with the collector ────────────────────────────
+
+test('the daily summary gets as many days as its own sentence claims', function () {
+  // The loop asked for days 2..8 while run.js handed it hour_map(meter_id, 72) — three days. Days
+  // with no buckets are excluded from the average on purpose, so nothing errored: it averaged the
+  // two days it could see and labelled the result "your 2-day average". Two days is not a baseline
+  // — one heavy laundry day moves it by half — and the figure is the entire reason the summary
+  // carries a comparison at all.
+  const time = require('../../../time');
+  const cfg = { daily_summary_hour: 21, overnight_start_hour: 2, overnight_end_hour: 5 };
+  const now = new Date('2026-08-31T03:38:00Z');            // 21:38 in Denver
+  const tz = 'America/Denver';
+
+  const fill = function (n) {
+    const h = {};
+    for (let i = 0; i < n; i++) h[time.hour_key_offset(now, i, tz)] = 6;
+    return h;
+  };
+
+  const full = rules.daily_summary(fill(rules.SUMMARY_HOURS_NEEDED), now, cfg, tz);
+  assert.strictEqual(full.detail.avg_over_days, rules.SUMMARY_COMPARE_DAYS,
+    'a full map must give the full comparison window');
+  assert.match(full.message, new RegExp('Your ' + rules.SUMMARY_COMPARE_DAYS + '-day average'));
+
+  // And the old window is demonstrably not enough, so this test fails if 72 ever comes back.
+  assert.ok(rules.daily_summary(fill(72), now, cfg, tz).detail.avg_over_days < rules.SUMMARY_COMPARE_DAYS);
+
+  // A short history still reports honestly rather than claiming seven days it does not have.
+  const young = rules.daily_summary(fill(24 * 4), now, cfg, tz);
+  assert.strictEqual(young.detail.avg_over_days, 3);
+  assert.match(young.message, /Your 3-day average/);
+});
+
+test('the collector loads the window the summary needs', function () {
+  // The two halves of the contract, pinned together. Both dispatch paths -- the owned tick and the
+  // observed-meter loop -- run evaluate(), so both need the wider map.
+  const src = require('fs').readFileSync(require.resolve('../collector/run'), 'utf8');
+  assert.strictEqual((src.match(/hour_map\([^)]*SUMMARY_HOURS_NEEDED\)/g) || []).length, 2,
+    'both hour_map calls must size themselves from the rules, not a literal');
+  assert.ok(!/hour_map\([^)]*,\s*72\)/.test(src), 'no hand-typed 72 left behind');
+});

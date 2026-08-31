@@ -157,6 +157,22 @@ function check_watchdog(last_read_at, now, cfg, started_at) {
  * The daily "still alive" total. Not a leak signal — it is the proof-of-life that tells you the
  * whole chain still works on a day when nothing is wrong.
  */
+/**
+ * How far back the daily summary compares against, and therefore how many hours of buckets the
+ * caller has to load.
+ *
+ * Stated as a constant because it is a CONTRACT with the collector, not a local choice. The loop
+ * below asked for days 2..8 while run.js was handing it hour_map(meter_id, 72) -- three days. Days
+ * with no buckets are excluded from the average by design, so this did not error or warn: it
+ * quietly averaged over the two days it could see and labelled the result with however many that
+ * was. The email then reports "your 2-day average" in a sentence built to say seven, and two days
+ * is not a baseline -- one heavy laundry day moves it by half.
+ *
+ * HOURS_NEEDED is what run.js loads. Change the comparison window here and the collector follows.
+ */
+const SUMMARY_COMPARE_DAYS = 7;
+const SUMMARY_HOURS_NEEDED = (SUMMARY_COMPARE_DAYS + 2) * 24;   // +1 for yesterday, +1 for today
+
 function daily_summary(hours, now, cfg, tz) {
   if (cfg.daily_summary_hour === null || cfg.daily_summary_hour < 0) return null;
   if (time.local_hour(now, tz) !== cfg.daily_summary_hour) return null;
@@ -178,7 +194,7 @@ function daily_summary(hours, now, cfg, tz) {
   // means something. Days with no buckets at all are excluded -- an unrecorded day averaged in as
   // zero would drag the baseline down and make every ordinary day look excessive.
   const prior = [];
-  for (let d = 2; d <= 8; d++) {
+  for (let d = 2; d <= SUMMARY_COMPARE_DAYS + 1; d++) {
     const day_keys = [];
     for (let h = 0; h < 24; h++) {
       day_keys.push(time.day_key_offset(now, d, tz) + 'T' + String(h).padStart(2, '0'));
@@ -873,4 +889,5 @@ module.exports = {
   sum_hours, overnight_keys,
   check_overnight, check_continuous, check_watchdog, daily_summary, current_run, run_spans,
   evaluate, status, ALERT_CATALOG, catalog_key, is_suppressible, ALWAYS_ON, sample_alerts,
+  SUMMARY_COMPARE_DAYS, SUMMARY_HOURS_NEEDED,
 };

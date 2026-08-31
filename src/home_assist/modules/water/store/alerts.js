@@ -280,9 +280,10 @@ function build_email(alert, cfg, ctx) {
     else if (!m.complete) v += ' — ' + (m.days - m.observed_days) + ' day(s) not recorded';
     return v;
   };
-  // On the summary the months are stated as a sentence below the headline (see `body`), so they are
-  // NOT repeated as rows -- the same two numbers twice on one screen is noise, not emphasis.
-  if (M && alert.kind !== 'summary') {
+  // Every email, summary included. The summary also states them as a sentence below the headline,
+  // so they appear twice there: the sentence gives the judgement, the rows put the figures with the
+  // other figures, which is where people look for them.
+  if (M) {
     ['this_month', 'last_month'].forEach(function (slot) {
       const m = M[slot];
       if (m) rows.push([m.label, month_value(m)]);

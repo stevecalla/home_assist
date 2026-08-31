@@ -119,7 +119,10 @@ test('the summary states the months as a sentence, and not twice', function () {
     CFG, { meter_id: 16642655, months: MONTHS });
   assert.match(e.text, /August 2026: 2,480 gal so far \(20 days\)\. July 2026 finished at 3,180 gal\./);
   assert.ok(!/so far.*so far/.test(e.text), 'the qualifier must not be doubled');
-  assert.strictEqual((e.text.match(/July 2026/g) || []).length, 1, 'stated once, not as a row as well');
+  // The sentence AND the rows: the sentence gives the judgement, the rows sit with the other
+  // figures. This used to assert exactly one occurrence.
+  assert.strictEqual((e.text.match(/July 2026/g) || []).length, 2, 'sentence and row');
+  assert.match(e.text, /^August 2026: 2,480 gal so far \(20 days\)$/m, 'and as a row of its own');
 });
 
 test('the summary subject carries yesterday AND the month so far', function () {

@@ -396,7 +396,10 @@ async function create_collector(options) {
     for (const m of reg) {
       const pid = Number(m.meter_id);
       try {
-        const hours = await readings.hour_map(pid, 72);
+        // Wide enough for the daily summary's comparison window, not just the hourly rules.
+        // 72 was sized for check_continuous (<= 24h) and check_overnight (today), and the summary
+        // was silently starved by it -- see rules.SUMMARY_HOURS_NEEDED. ~216 rows per meter.
+        const hours = await readings.hour_map(pid, rules.SUMMARY_HOURS_NEEDED);
         const recent = await readings.recent_readings(pid, 500);
         const current = rules.current_run(recent, now, cfg);
         const fired = rules.evaluate({
@@ -458,7 +461,9 @@ async function create_collector(options) {
         owned_meter_row = reg.find(function (m) { return Number(m.meter_id) === Number(meter_id); }) || null;
       } catch (e) { /* keep the previous map */ }
       const now = new Date();
-      const hours = await readings.hour_map(meter_id, 72);
+      // See rules.SUMMARY_HOURS_NEEDED: the daily summary compares yesterday against the previous
+      // seven FULL days, so it needs nine days of buckets to do what its own sentence claims.
+      const hours = await readings.hour_map(meter_id, rules.SUMMARY_HOURS_NEEDED);
 
       // Heartbeat every tick, even with no packets — this is what makes "receiver silent" visible
       // in the UI rather than looking like a quiet night.
