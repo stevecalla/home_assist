@@ -132,10 +132,27 @@ function Row({ m, yours, ownEmail, emailEnabled, onSaved }) {
           <input value={email} onChange={(e) => setEmail(e.target.value)}
                  placeholder={ownEmail ? ownEmail + '  (the default list)' : '(no default configured)'} />
           <span className="w-field-help">
-            Comma-separate for several. Blank falls back to the global list in{' '}
-            <Link to="/water/settings#alert_email_to">Settings</Link>
-            {effective ? <> — currently <b>{effective}</b></> : null}.
+            Comma-separate for several. Blank uses the global list in{' '}
+            <Link to="/water/settings#alert_email_to">Settings</Link>.
           </span>
+          {/* The RULE and the STATE, deliberately on separate lines.
+              They used to share one sentence: "Blank falls back to the global list in Settings —
+              currently X". X is this meter's OWN address whenever it has one, but the only noun
+              near "currently" was "the global list" -- so a meter with its own address read as
+              though the global setting had been changed to it. Someone chasing that would go and
+              "fix" a Settings value that was never wrong.
+              Now the destination is stated on its own line and always names where it came from,
+              so "why this address?" is answered beside the address. */}
+          {effective ? (
+            <span className="w-field-help w-sendto">
+              Alerts go to <b>{effective}</b>{' '}
+              <span className="muted">({email.trim() ? 'this meter\u2019s own address' : 'the global list'})</span>
+            </span>
+          ) : (
+            <span className="w-field-help w-sendto">
+              <b>Nowhere</b> <span className="muted">(no address here and no global list set)</span>
+            </span>
+          )}
         </label>
       </div>
 

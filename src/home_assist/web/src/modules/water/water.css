@@ -925,6 +925,11 @@ th.w-grid-num { padding: 6px 8px; }
 .w-meter-grid .w-field-label { display: block; margin-bottom: 4px; }
 .w-meter-grid .w-field-help { display: block; margin-top: 4px; }
 
+/* The resolved destination, set apart from the rule above it. Same size as the help text, but
+   with air and a rule so the eye reads it as an answer rather than as more instruction. */
+.w-sendto { display: block; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.w-sendto b { color: var(--ink); }
+
 .w-check { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
 .w-check input { width: auto; }
 
