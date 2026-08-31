@@ -30,7 +30,19 @@ export default function Settings() {
     setBusy(false);
     if (r.status === 200 && r.body.ok) {
       setFields(r.body.settings); setDraft({});
-      setMsg('Saved. The collector picks these up within a minute — no restart needed.');
+      // A value can be CHANGED on the way in -- clamp() snaps anything out of range. Reporting a
+      // plain "Saved." after storing a different number than the one typed is the worst of both:
+      // it reads as success, and the field reloads showing a value nobody chose.
+      const adj = r.body.adjusted || [];
+      if (adj.length) {
+        setMsg('');
+        setErr('Saved, but ' + adj.length + (adj.length === 1 ? ' value was' : ' values were')
+          + ' adjusted: '
+          + adj.map((a) => a.label + ' — you asked for ' + a.asked + ', saved ' + a.saved
+              + ' (' + a.reason + ')').join('; '));
+      } else {
+        setMsg('Saved. The collector picks these up within a minute — no restart needed.');
+      }
     } else setErr(r.body.error || 'Save failed');
   }
 
@@ -150,7 +162,20 @@ export default function Settings() {
                   />
                   )
                 )}
-                <div className="w-field-help">{f.help}</div>
+                <div className="w-field-help">
+                  {f.help}
+                  {/* The limits were sent by describe() all along and rendered nowhere, so the only
+                      way to discover that a field refuses 0 was to type 0 and watch it come back
+                      as 1. A range is cheap to print and answers the question before it is asked. */}
+                  {f.type !== 'bool' && f.type !== 'string' && (f.min !== undefined || f.max !== undefined) ? (
+                    <div className="w-range-hint">
+                      {f.min !== undefined && f.max !== undefined ? 'Range ' + f.min + '\u2013' + f.max
+                        : f.min !== undefined ? 'Minimum ' + f.min : 'Maximum ' + f.max}
+                      {f.min_nonzero !== undefined ? ', or 0 for unlimited (any other value is raised to ' + f.min_nonzero + ')' : ''}
+                      {f.default !== undefined ? ' \u00b7 default ' + f.default : ''}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             );
           })}

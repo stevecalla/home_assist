@@ -160,7 +160,8 @@ const DEFS = {
     label: 'Keep the hourly rollup for (days)',
     help: '0 = forever, and forever is cheap: 8,760 rows and about 1 MB per meter per YEAR. This ' +
       'is the table every chart and every leak rule reads, so it is the one place where trimming ' +
-      'costs capability rather than disk. A value below 7 is refused -- the continuous-flow rule ' +
+      'costs capability rather than disk. A value below 7 is RAISED to 7 on save -- the ' +
+      'continuous-flow rule ' +
       'needs six hours, the overnight rule needs last night, and the daily summary needs ' +
       'yesterday, so a short retention here would silently stop the monitor detecting the leaks ' +
       'it exists to detect. Long view ranges beyond this simply run out of data.',
@@ -289,14 +290,35 @@ function clamp(d, v) {
   return v;
 }
 
+/**
+ * Returns { values, adjusted }.
+ *
+ * `adjusted` names every setting whose saved value is not the value that was typed. clamp() has
+ * always silently snapped out-of-range input and returned "Saved." -- so typing 0 into a field with
+ * a minimum of 1 stored 1, reported success, and reloaded showing a number nobody chose. On a page
+ * whose entire job is displaying what is configured, a value quietly rewritten between the box and
+ * the database is the one thing it must not do without saying so.
+ */
 async function set_many(patch, who) {
   const now = new Date();
   const stamp = time.sql_utc(now);
   const stamp_local = time.sql_local(now);
   const entries = Object.keys(patch || {}).filter(function (k) { return DEFS[k]; });
+  const adjusted = [];
   for (const name of entries) {
     const d = DEFS[name];
-    let v = clamp(d, coerce(d.type, patch[name], DEFS[name].def));
+    const wanted = coerce(d.type, patch[name], DEFS[name].def);
+    let v = clamp(d, wanted);
+    if (v !== wanted) {
+      adjusted.push({
+        name: name, label: d.label, asked: wanted, saved: v,
+        // WHY it moved, so the notice can say "minimum is 1" rather than only "we changed it".
+        reason: (d.min_nonzero !== undefined && wanted > 0 && wanted < d.min_nonzero)
+          ? 'the lowest value that still works here is ' + d.min_nonzero
+          : (d.min !== undefined && wanted < d.min ? 'the minimum is ' + d.min
+            : 'the maximum is ' + d.max),
+      });
+    }
     await db.query(
       // created_at_* stays out of the ON DUPLICATE clause: a setting edited ten times was still
       // created once, and "when did this row first appear?" is the question it exists to answer.
@@ -308,7 +330,7 @@ async function set_many(patch, who) {
     );
   }
   _cache = null;
-  return all({ force: true });
+  return { values: await all({ force: true }), adjusted: adjusted };
 }
 
 // Seed any missing rows from the .env/built-in layer. Called once at collector startup so the

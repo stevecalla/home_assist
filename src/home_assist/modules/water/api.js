@@ -610,9 +610,22 @@ function mount(app) {
     const cfg = await settings.all();
     const sel = resolve_meter(req.query.meter, cfg, req);
     if (!sel) return deny(res);
-    const series = await readings.daily_series(sel.meter_id, req.query.days || 30);
+    // Two kinds of range, deliberately distinguishable in the response.
+    //   ?days=N            rolling -- "how am I doing lately", always the same length
+    //   ?period=this-month calendar -- "what will the bill say", 28-31 days
+    // Mixing them silently would be the trap: last month is not 30 days, and this month is not a
+    // whole one. `range` carries the resolved bounds so the page can state them rather than imply.
+    const period = String(req.query.period || '').trim();
+    let series;
+    let range = null;
+    if (period === 'this-month' || period === 'last-month') {
+      range = time.month_range(new Date(), period === 'last-month' ? 1 : 0);
+      series = await readings.daily_series_between(sel.meter_id, range.from, range.to);
+    } else {
+      series = await readings.daily_series(sel.meter_id, req.query.days || 30);
+    }
     res.json({
-      ok: true, series: series, tz: time.zone(),
+      ok: true, series: series, tz: time.zone(), range: range,
       meter_id: sel.meter_id, own_meter_id: meter_access.primary(req.user, req.role, cfg.meter_id), selection: sel.selection,
     });
   }));
@@ -679,8 +692,11 @@ function mount(app) {
 
   app.post('/api/water/settings', require_panel('water-settings'), guard(async function (req, res) {
     await schema.ensure_schema(db);
-    const values = await settings.set_many(req.body || {}, req.user);
-    res.json({ ok: true, settings: settings.describe(values) });
+    // `adjusted` rides along so the page can say which values it changed on the way in. A save
+    // that silently stores a different number than the one typed is indistinguishable from a save
+    // that did nothing -- both report success and show a value you did not choose.
+    const r = await settings.set_many(req.body || {}, req.user);
+    res.json({ ok: true, settings: settings.describe(r.values), adjusted: r.adjusted });
   }));
 
   app.post('/api/water/test-alert', require_panel('water-settings'), guard(async function (req, res) {

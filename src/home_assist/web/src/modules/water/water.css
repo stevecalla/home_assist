@@ -216,6 +216,19 @@
 }
 .w-field textarea:focus-visible { outline: 2px solid var(--w-series); outline-offset: 1px; }
 
+/* The allowed range, quieter than the help text above it -- a constraint, not an explanation. */
+/* Separates the rolling chips from the calendar ones. They answer different questions and a single
+   undivided row implies they are interchangeable. */
+.w-range-sep {
+  display: inline-block; width: 1px; height: 16px; margin: 0 4px 0 10px;
+  background: var(--line); vertical-align: middle;
+}
+/* Said in words, not only by a shorter bar. A part month beside a whole one is the easiest wrong
+   comparison this page can invite. */
+.w-partial { color: var(--w-serious); font-weight: 600; }
+
+.w-range-hint { margin-top: 4px; font-size: 11px; color: var(--w-axis); font-variant-numeric: tabular-nums; }
+
 .w-dirty { color: var(--w-serious); font-weight: 700; }
 
 @media (max-width: 760px) {

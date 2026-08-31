@@ -55,7 +55,11 @@ export const api = {
   // so every existing caller keeps its old behaviour.
   waterStatus: (meter) => jget('/api/water/status?meter=' + encodeURIComponent(meter || 'mine')),
   waterHourly: (hours, meter) => jget('/api/water/hourly?hours=' + (hours || 48) + '&meter=' + encodeURIComponent(meter || 'mine')),
-  waterDaily: (days, meter) => jget('/api/water/daily?days=' + (days || 30) + '&meter=' + encodeURIComponent(meter || 'mine')),
+  // `period` ('this-month' | 'last-month') wins over `days` when present — a calendar range and
+  // a rolling one answer different questions, so the server resolves whichever was asked for.
+  waterDaily: (days, meter, period) => jget('/api/water/daily?days=' + (days || 30)
+    + '&meter=' + encodeURIComponent(meter || 'mine')
+    + (period ? '&period=' + encodeURIComponent(period) : '')),
   waterReadings: (limit, meter) => jget('/api/water/readings?limit=' + (limit || 25) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterAlerts: (limit, meter) => jget('/api/water/alerts?limit=' + (limit || 50) + '&meter=' + encodeURIComponent(meter || 'mine')),
   waterSettings: () => jget('/api/water/settings'),

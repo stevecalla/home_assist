@@ -557,6 +557,42 @@ async function hourly_series(meter_id, back_hours) {
 /**
  * Daily totals for the last N local days, newest last, zero-filled.
  */
+/**
+ * Daily totals between two day keys, inclusive — the calendar counterpart to daily_series(), which
+ * only ever counts backwards from today.
+ *
+ * Every day in the span is emitted whether or not a row exists, carrying `observed`. That flag is
+ * the entire reason this returns a filled range rather than the rows it found: on a leak monitor
+ * "no data" and "zero" are opposite claims, and a neighbour's month from before their retention
+ * window must render as a gap, not as a month they used no water.
+ */
+async function daily_series_between(meter_id, from_key, to_key) {
+  const from = String(from_key).slice(0, 10);
+  const to = String(to_key).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to < from) return [];
+  const rows = await db.query(
+    'SELECT LEFT(hour_key, 10) AS day_key, SUM(gallons) AS gallons, SUM(reading_count) AS readings ' +
+    'FROM water_hourly WHERE meter_id = ? AND hour_key >= ? AND hour_key <= ? ' +
+    'GROUP BY LEFT(hour_key, 10) ORDER BY day_key',
+    [meter_id, from + 'T00', to + 'T23']
+  );
+  const by = {};
+  rows.forEach(function (r) { by[r.day_key] = { gallons: Number(r.gallons), readings: Number(r.readings) }; });
+
+  const out = [];
+  // Walked as UTC dates purely to step the calendar; the KEYS are already local strings, so no
+  // timezone arithmetic happens here and none can drift.
+  const cur = new Date(from + 'T00:00:00Z');
+  const end = new Date(to + 'T00:00:00Z');
+  while (cur <= end) {
+    const k = cur.toISOString().slice(0, 10);
+    const hit = by[k];
+    out.push({ day_key: k, gallons: hit ? hit.gallons : 0, readings: hit ? hit.readings : 0, observed: !!hit });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
 async function daily_series(meter_id, back_days) {
   const days = Math.max(1, Math.min(Number(back_days) || 30, 400));
   const first = time.day_key_offset(new Date(), days - 1);
@@ -601,5 +637,5 @@ module.exports = {
   backfill_observed_hourly,
   record_reception, reception_series, prune_reception, daily_series_range,
   record_packets, packet_series, packet_count, meters_heard, prune_packets, meter_clause,
-  hour_map, hourly_series, daily_series, sum_for_hours, recent_readings,
+  hour_map, hourly_series, daily_series, daily_series_between, sum_for_hours, recent_readings,
 };
