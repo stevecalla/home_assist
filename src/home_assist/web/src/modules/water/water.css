@@ -219,6 +219,11 @@
 /* The allowed range, quieter than the help text above it -- a constraint, not an explanation. */
 /* Separates the rolling chips from the calendar ones. They answer different questions and a single
    undivided row implies they are interchangeable. */
+/* The headline for the selected range. Larger than the help text around it because on the calendar
+   periods it IS the answer, not a note about the answer. */
+.w-daily-total { font-size: 13.5px; margin: 0 0 10px; }
+.w-daily-total b { font-size: 15px; }
+
 .w-range-sep {
   display: inline-block; width: 1px; height: 16px; margin: 0 4px 0 10px;
   background: var(--line); vertical-align: middle;

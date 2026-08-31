@@ -161,18 +161,43 @@ export default function History() {
               part-month set beside a whole one is the classic false comparison: 24 days of August
               against all of July reads as a 23% drop that is nothing but the calendar. The Daily
               average tile already excludes today for the same reason, one level down. */}
-          {daily && daily.range ? (
-            <> <b>{daily.range.label}</b>{' '}
+        </p>
+
+        {/* THE NUMBER, not just the shape. "Last month" exists to answer "what will the bill say",
+            and a chart of bar heights does not answer it.
+            The average is over the days that HAVE data, and the gap is named when there is one:
+            a month missing three days already has an understated total, and dividing it by the
+            calendar length would understate it twice. */}
+        {daily && daily.summary ? (
+          <p className="w-daily-total">
+            {daily.range ? <b>{daily.range.label}</b> : <b>Last {daily.summary.days} days</b>}
+            {daily.range ? (
               <span className="muted">
-                ({daily.range.from.slice(5)} – {daily.range.to.slice(5)}
+                {' '}({daily.range.from.slice(5)} – {daily.range.to.slice(5)}
                 {daily.range.partial ? ', so far' : ''})
               </span>
-              {daily.range.partial
-                ? <span className="w-partial"> Part month — not comparable to a full one.</span>
-                : null}
-            </>
-          ) : null}
-        </p>
+            ) : null}
+            {' — '}
+            <b>{Math.round(daily.summary.total).toLocaleString()}</b> gal
+            {daily.summary.observed_days
+              ? <> · <b>{Math.round(daily.summary.avg_day).toLocaleString()}</b> gal/day average</>
+              : null}
+            <span className="muted">
+              {' '}· {daily.summary.observed_days} of {daily.summary.days} days recorded
+            </span>
+            {daily.range && daily.range.partial
+              ? <span className="w-partial"> Part month — not comparable to a full one.</span>
+              : null}
+            {!daily.summary.complete && daily.summary.observed_days ? (
+              <span className="w-partial">
+                {' '}{daily.summary.missing_days} day{daily.summary.missing_days === 1 ? '' : 's'} missing —
+                the total is lower than what was actually used.
+              </span>
+            ) : null}
+            <span className="muted"> · times are {(daily.tz || '').split('/')[1]
+              ? (daily.tz || '').split('/')[1].replace('_', ' ') : daily.tz} time</span>
+          </p>
+        ) : null}
         <BarChart
           data={dayBars}
           height={190}

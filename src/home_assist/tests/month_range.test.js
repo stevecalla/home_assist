@@ -90,3 +90,40 @@ test('the page states the resolved dates and flags a part month', function () {
   assert.match(ui, /daily\.range\.partial/);
   assert.match(ui, /Part month/, 'and say so in words, not only with a shorter bar');
 });
+
+
+test('the summary counts recorded days, not calendar days', function () {
+  // A month missing three days already has an understated TOTAL. Averaging that over the calendar
+  // length would understate it a second time, so the mean is over the days that HAVE data and the
+  // gap is reported. Same rule as the charts: a day with no row is not a day of zero usage.
+  const api = fs.readFileSync(require.resolve('../modules/water/api'), 'utf8');
+  const i = api.indexOf('function summarise');
+  assert.ok(i !== -1, 'one summary helper, shared by both endpoints');
+  const seg = api.slice(i, i + 1200);
+  assert.match(seg, /observed = rows\.filter/);
+  assert.match(seg, /observed_days:/);
+  assert.match(seg, /missing_days:/);
+  assert.match(seg, /complete:/);
+  assert.match(seg, /avg = observed\.length/, 'the mean is over recorded days');
+});
+
+test('Long view offers the same calendar periods as History', function () {
+  // The option existing on one page and not the other reads as a bug in whichever you found second.
+  const api = fs.readFileSync(require.resolve('../modules/water/api'), 'utf8');
+  const i = api.indexOf("if (mode === 'long')");
+  const seg = api.slice(i, i + 900);
+  assert.match(seg, /period === 'this-month' \|\| period === 'last-month'/);
+  assert.match(seg, /daily_series_between/);
+
+  const ui = fs.readFileSync(require.resolve('../web/src/modules/water/Monitor.jsx'), 'utf8');
+  assert.match(ui, /MONTH_CHIPS/);
+  assert.match(ui, /setLvPeriod\(null\), setDays\(n\)/, 'a rolling chip must clear the calendar one');
+});
+
+test('History states the total and which timezone the days are bucketed in', function () {
+  const ui = fs.readFileSync(require.resolve('../web/src/modules/water/History.jsx'), 'utf8');
+  assert.match(ui, /daily\.summary\.total/, 'the number, not only the bars');
+  assert.match(ui, /gal\/day average/);
+  assert.match(ui, /observed_days\} of \{daily\.summary\.days\} days recorded/);
+  assert.match(ui, /times are/, 'a day boundary with no stated zone is an unexplained choice');
+});

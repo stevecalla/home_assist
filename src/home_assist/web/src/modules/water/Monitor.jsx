@@ -41,6 +41,12 @@ const RUN = {
 
 const HOUR_CHIPS = [1, 6, 24, 72];
 const DAY_CHIPS = [7, 30, 90, 365];
+// Calendar periods, offered on Long view exactly as on History. Separate group, because a rolling
+// window and a calendar month answer different questions and 'last month' is not 30 days.
+const MONTH_CHIPS = [
+  { key: 'this-month', label: 'This month' },
+  { key: 'last-month', label: 'Last month' },
+];
 // Minutes, for the Real time tab. 15 minutes is about 225 transmissions — enough to see the shape
 // of the last few gallons without the packet lane becoming a solid block.
 const RT_CHIPS = [{ m: 15, label: '15m' }, { m: 60, label: '1h' }, { m: 360, label: '6h' }, { m: 1440, label: '24h' }];
@@ -149,6 +155,7 @@ export default function Monitor() {
   // was defaulting to the firehose.
   const [mode, setMode] = useState('heartbeat');
   const [hours, setHours] = useState(72);
+  const [lvPeriod, setLvPeriod] = useState(null);   // null = the rolling `days` window
   const [days, setDays] = useState(30);
   const [hoursText, setHoursText] = useState('72');
   const [daysText, setDaysText] = useState('30');
@@ -221,11 +228,11 @@ export default function Monitor() {
   const loadSeries = useCallback(async () => {
     if (mode === 'realtime') return;
     const q = mode === 'long'
-      ? { mode: 'long', days, meter: sel }
+      ? (lvPeriod ? { mode: 'long', period: lvPeriod, meter: sel } : { mode: 'long', days, meter: sel })
       : { mode: 'heartbeat', hours, meter: sel };
     const m = await api.waterMeter(q);
     if (m.status === 200 && m.body.ok) setMeter(m.body);
-  }, [mode, hours, days, sel]);
+  }, [mode, hours, days, sel, lvPeriod]);
 
   const loadSlow = useCallback(async () => {
     const h = await api.waterHourly(48, sel);
@@ -579,13 +586,21 @@ export default function Monitor() {
               ) : null}
             </>
           ) : null}
+          {mode === 'long' ? MONTH_CHIPS.map((mc) => (
+            <button key={mc.key} type="button"
+                    className={'w-chip' + (lvPeriod === mc.key ? ' on' : '')}
+                    onClick={() => setLvPeriod(mc.key)}>{mc.label}</button>
+          )) : null}
+          {mode === 'long' ? <span className="w-range-sep" aria-hidden="true" /> : null}
           {mode !== 'realtime' ? (mode === 'long' ? DAY_CHIPS : HOUR_CHIPS).map((n) => (
             <button
               key={n}
               type="button"
               className={'w-chip' + ((mode === 'long' ? days : hours) === n ? ' on' : '')}
               onClick={() => (mode === 'long'
-                ? (setDays(n), setDaysText(String(n)))
+                // Picking a rolling window clears any calendar period — the two are alternatives,
+                // and leaving both lit would leave the chart unable to say which it drew.
+                ? (setLvPeriod(null), setDays(n), setDaysText(String(n)))
                 : (setHours(n), setHoursText(String(n))))}
             >
               {n}{mode === 'long' ? 'd' : 'h'}
@@ -714,11 +729,22 @@ export default function Monitor() {
             <>
               <div>
                 <div className="w-readout-sm">{lv.summary.total.toFixed(0)} gal</div>
-                <div className="w-readout-lab">total over {lv.days} days</div>
+                {/* Name the RANGE, not a day count: on a calendar period "total over 31 days" is
+                    true but says nothing about which 31. */}
+                <div className="w-readout-lab">
+                  {lv.range ? 'total \u2014 ' + lv.range.label : 'total over ' + lv.days + ' days'}
+                </div>
               </div>
               <div>
                 <div className="w-readout-sm">{lv.summary.avg_day.toFixed(1)} gal</div>
-                <div className="w-readout-lab">average day</div>
+                {/* Averaged over the days that HAVE data, so a gap cannot understate it twice --
+                    once in the total, again by dividing by days that were never recorded. */}
+                <div className="w-readout-lab">
+                  average day
+                  {lv.summary && !lv.summary.complete
+                    ? ' \u00b7 ' + lv.summary.observed_days + ' of ' + lv.summary.days + ' recorded'
+                    : ''}
+                </div>
               </div>
             </>
           ) : null}
