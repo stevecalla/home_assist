@@ -180,20 +180,50 @@
 .w-settings-group h3 { font-size: 14px; margin: 0 0 4px; }
 .w-field {
   display: grid;
-  grid-template-columns: minmax(220px, 320px) 160px 1fr;
+  /* The value column was a flat 160px while the help text took 1fr. Fine for "5" or "100000";
+     hopeless for the fields that hold an email list or a URL, which rendered as
+     "water-alerts@kidderwi" beside half a screen of unused space. Each .w-field is its own grid,
+     so the column can be sized per row -- see .is-text below. */
+  grid-template-columns: minmax(220px, 320px) minmax(120px, 180px) 1fr;
   gap: 12px;
   align-items: start;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
+/* Text values: emails, comma-separated lists, ntfy server URLs. Given real room, and the help
+   column still gets whatever is left. */
+.w-field.is-text { grid-template-columns: minmax(220px, 320px) minmax(280px, 460px) 1fr; }
+
 .w-field-label { font-weight: 600; font-size: 13px; }
 .w-field-help { color: var(--muted); font-size: 12px; }
 .w-field input { width: 100%; }
+
+/* Draggable in both directions, because "how many addresses are in this list" is a question you
+   answer by looking. Starts one line high and grows to fit what is already stored, so a long list
+   is legible before you touch anything. */
+.w-field textarea {
+  width: 100%;
+  min-height: 32px;
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  resize: both;
+  overflow: auto;
+  field-sizing: content;   /* where supported, the box already fits its contents */
+}
+.w-field textarea:focus-visible { outline: 2px solid var(--w-series); outline-offset: 1px; }
+
 .w-dirty { color: var(--w-serious); font-weight: 700; }
 
 @media (max-width: 760px) {
-  .w-field { grid-template-columns: 1fr; gap: 4px; }
-  .w-field input { max-width: 200px; }
+  .w-field, .w-field.is-text { grid-template-columns: 1fr; gap: 4px; }
+  /* Numbers stay small; text takes the width it needs. Capping both at 200px was what made an
+     address field unreadable on a phone as well as on a desktop. */
+  .w-field input[type="number"] { max-width: 200px; }
+  .w-field textarea { width: 100%; min-height: 44px; }
 }
 
 /* ── tables ────────────────────────────────────────────────────────────── */
@@ -894,6 +924,11 @@ th.w-grid-num { padding: 6px 8px; }
 .w-meter-grid input[type="text"], .w-meter-grid input:not([type]) { width: 100%; }
 .w-meter-grid .w-field-label { display: block; margin-bottom: 4px; }
 .w-meter-grid .w-field-help { display: block; margin-top: 4px; }
+
+/* The resolved destination, set apart from the rule above it. Same size as the help text, but
+   with air and a rule so the eye reads it as an answer rather than as more instruction. */
+.w-sendto { display: block; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.w-sendto b { color: var(--ink); }
 
 .w-check { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
 .w-check input { width: auto; }
