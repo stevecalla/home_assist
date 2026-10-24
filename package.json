@@ -2,7 +2,7 @@
   "name": "home_assist",
   "version": "0.1.0",
   "private": true,
-  "description": "Home assistant platform shell (Express + React) \u2014 first module: Badger Orion water-meter leak monitor.",
+  "description": "Home assistant platform shell (Express + React) — first module: Badger Orion water-meter leak monitor.",
   "main": "server_home_assist_8050.js",
   "engines": {
     "node": ">=18"
@@ -72,7 +72,7 @@
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "mysql2": "^3.15.3",
-    "nodemailer": "^9.0.3"
+    "nodemailer": "^10.2.1"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
